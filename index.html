@@ -49,6 +49,7 @@
     <input type="text" id="branch" placeholder="main" value="main">
     <button class="btn" onclick="lister()">Lister les fichiers (avec leur vraie casse)</button>
     <p class="hint" style="margin-bottom:0;">Les fichiers en double (même nom, casse différente) sont encadrés en orange. Vérifie bien lequel tu supprimes : garde <strong>index.html</strong> (minuscule), supprime <strong>Index.html</strong> (majuscule).</p>
+    <button class="btn" onclick="oublierChamps()" style="background:#6e6e73; margin-top:12px;">Effacer les identifiants mémorisés</button>
   </div>
 
   <div class="card" id="files-card" style="display:none;">
@@ -102,12 +103,16 @@
   // Récupère l'arbre complet du dépôt (chemins EXACTS, casse respectée).
   async function getArbre(){
     const u=val('user'), r=val('repo'), br=val('branch');
-    // 1) tête de branche
-    const refResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/ref/heads/${br}`, { headers: headers() });
+    // 1) tête de branche — SANS CACHE, avec anti-cache dans l'URL.
+    // C'est le point critique : si Safari nous sert une ancienne valeur, on
+    // construit le commit sur un mauvais parent et GitHub répond "not a fast
+    // forward". On force donc une lecture réseau fraîche à chaque appel.
+    const refUrl = `https://api.github.com/repos/${u}/${r}/git/ref/heads/${br}?_cb=${Date.now()}`;
+    const refResp = await fetch(refUrl, { headers: headers(), cache: "no-store" });
     if(!refResp.ok){ throw new Error(`Lecture de la branche impossible (${refResp.status}). Vérifie le nom du dépôt et de la branche.`); }
     const ref = await refResp.json();
     const headSha = ref.object.sha;
-    // 2) commit -> arbre
+    // 2) commit -> arbre (objets immuables, adressés par SHA : le cache est sans risque ici)
     const cResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/commits/${headSha}`, { headers: headers() });
     if(!cResp.ok) throw new Error(`Lecture du commit impossible (${cResp.status}).`);
     const commit = await cResp.json();
@@ -168,53 +173,109 @@
     if(!ok) return;
 
     try{
-      message(`Suppression de « ${pathExact} »…`,"success");
       const u=val('user'), r=val('repo'), br=val('branch');
+      let derniereErreur = null;
 
-      // On repart de l'arbre le plus récent
-      const { headSha, tree } = await getArbre();
+      // On tente jusqu'à 4 fois : si la branche a bougé entre notre lecture et
+      // notre écriture (déploiement en parallèle, lecture en cache, etc.),
+      // GitHub répond "not a fast forward". Plutôt que d'échouer, on RELIT la
+      // pointe fraîche et on refait le commit dessus.
+      for(let tentative=1; tentative<=4; tentative++){
+        message(tentative===1
+          ? `Suppression de « ${pathExact} »…`
+          : `La branche avait bougé — nouvelle tentative (${tentative}/4)…`, "success");
 
-      // Sécurité : le fichier existe-t-il toujours, à ce chemin EXACT ?
-      const cible = tree.tree.find(e=>e.type==='blob' && e.path===pathExact);
-      if(!cible){
-        message(`« ${pathExact} » n'existe plus à ce chemin exact. Recharge la liste.`,"error");
-        return;
+        // 1) pointe + arbre FRAIS (getArbre lit sans cache)
+        const { headSha, tree } = await getArbre();
+
+        // 2) le fichier existe-t-il toujours, à ce chemin EXACT ?
+        const cible = tree.tree.find(e=>e.type==='blob' && e.path===pathExact);
+        if(!cible){
+          message(`« ${pathExact} » n'existe plus à ce chemin exact — il est peut-être déjà supprimé. Je recharge la liste.`,"success");
+          lister();
+          return;
+        }
+
+        // 3) nouvel arbre = tous les blobs SAUF celui-ci (reconstruit de zéro)
+        const nouvelArbre = tree.tree
+          .filter(e=>e.type==='blob' && e.path!==pathExact)
+          .map(e=>({ path:e.path, mode:e.mode, type:'blob', sha:e.sha }));
+
+        const treeResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/trees`, {
+          method:"POST", headers: headers(),
+          body: JSON.stringify({ tree: nouvelArbre })
+        });
+        if(!treeResp.ok){ const e=await treeResp.json().catch(()=>({})); throw new Error(`Création de l'arbre : ${e.message||treeResp.status}`); }
+        const newTree = await treeResp.json();
+
+        // 4) commit basé sur la pointe FRAÎCHE
+        const commitResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/commits`, {
+          method:"POST", headers: headers(),
+          body: JSON.stringify({ message:`Suppression du doublon ${pathExact}`, tree:newTree.sha, parents:[headSha] })
+        });
+        if(!commitResp.ok){ const e=await commitResp.json().catch(()=>({})); throw new Error(`Création du commit : ${e.message||commitResp.status}`); }
+        const newCommit = await commitResp.json();
+
+        // 5) on avance la branche
+        const patchResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/refs/heads/${br}`, {
+          method:"PATCH", headers: headers(),
+          body: JSON.stringify({ sha:newCommit.sha, force:false })
+        });
+
+        if(patchResp.ok){
+          message(`✅ « ${pathExact} » supprimé (commit ${newCommit.sha.substring(0,7)}).`,"success");
+          lister();
+          return;
+        }
+
+        const e = await patchResp.json().catch(()=>({}));
+        derniereErreur = e.message || String(patchResp.status);
+
+        // "not a fast forward" = la branche a bougé : on réessaie avec une pointe fraîche.
+        if(patchResp.status===422 && /fast[\s-]?forward/i.test(derniereErreur)){
+          continue;
+        }
+        // Toute autre erreur : inutile d'insister.
+        throw new Error(`Mise à jour de la branche : ${derniereErreur}`);
       }
 
-      // Nouvel arbre = tous les blobs SAUF celui-ci (reconstruit à partir de zéro,
-      // sans base_tree, pour que la suppression soit bien prise en compte).
-      const nouvelArbre = tree.tree
-        .filter(e=>e.type==='blob' && e.path!==pathExact)
-        .map(e=>({ path:e.path, mode:e.mode, type:'blob', sha:e.sha }));
-
-      const treeResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/trees`, {
-        method:"POST", headers: headers(),
-        body: JSON.stringify({ tree: nouvelArbre })
-      });
-      if(!treeResp.ok){ const e=await treeResp.json().catch(()=>({})); throw new Error(`Création de l'arbre : ${e.message||treeResp.status}`); }
-      const newTree = await treeResp.json();
-
-      // Nouveau commit pointant sur cet arbre
-      const commitResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/commits`, {
-        method:"POST", headers: headers(),
-        body: JSON.stringify({ message:`Suppression du doublon ${pathExact}`, tree:newTree.sha, parents:[headSha] })
-      });
-      if(!commitResp.ok){ const e=await commitResp.json().catch(()=>({})); throw new Error(`Création du commit : ${e.message||commitResp.status}`); }
-      const newCommit = await commitResp.json();
-
-      // On avance la branche sur ce commit
-      const patchResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/refs/heads/${br}`, {
-        method:"PATCH", headers: headers(),
-        body: JSON.stringify({ sha:newCommit.sha, force:false })
-      });
-      if(!patchResp.ok){ const e=await patchResp.json().catch(()=>({})); throw new Error(`Mise à jour de la branche : ${e.message||patchResp.status}`); }
-
-      message(`✅ « ${pathExact} » supprimé (commit ${newCommit.sha.substring(0,7)}).`,"success");
-      lister(); // on rafraîchit
+      throw new Error(`La branche n'arrête pas de bouger (${derniereErreur}). Attends quelques secondes qu'un éventuel déploiement se termine, puis réessaie.`);
     }catch(err){
       message("Échec de la suppression : "+err.message,"error");
     }
   }
+
+  // ---------- Mémorisation des champs (localStorage) ----------
+  // On enregistre ce qui est saisi au fil de la frappe, et on le recharge à
+  // l'ouverture : plus besoin de tout retaper à chaque tentative.
+  const CHAMPS = ['user','token','repo','branch'];
+  const CLE_STOCKAGE = 'supprime_doublon_config';
+
+  function sauverChamps(){
+    const data = {};
+    CHAMPS.forEach(id => { data[id] = document.getElementById(id).value; });
+    try { localStorage.setItem(CLE_STOCKAGE, JSON.stringify(data)); } catch(_){}
+  }
+
+  function chargerChamps(){
+    let data = {};
+    try { data = JSON.parse(localStorage.getItem(CLE_STOCKAGE)) || {}; } catch(_){}
+    CHAMPS.forEach(id => {
+      if (data[id] !== undefined && data[id] !== '') {
+        document.getElementById(id).value = data[id];
+      }
+    });
+  }
+
+  function oublierChamps(){
+    try { localStorage.removeItem(CLE_STOCKAGE); } catch(_){}
+    CHAMPS.forEach(id => { document.getElementById(id).value = (id === 'branch' ? 'main' : ''); });
+    message("Identifiants mémorisés effacés de cet appareil.","success");
+  }
+
+  // Au démarrage : on restaure les valeurs, puis on enregistre à chaque frappe.
+  chargerChamps();
+  CHAMPS.forEach(id => document.getElementById(id).addEventListener('input', sauverChamps));
 </script>
 </body>
 </html>
