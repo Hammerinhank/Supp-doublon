@@ -3,16 +3,218 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Supprime un fichier qui a un doublon avec la même casse</title>
+<title>Supprime-doublon</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#f5f5f7; color:#1d1d1f; text-align:center; padding:60px 20px; }
-  h1 { color:#0071e3; }
-  p { color:#86868b; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f5f5f7; color:#1d1d1f; margin:0; padding:20px; }
+  .container { max-width:500px; margin:0 auto; }
+  .card { background:#fff; border-radius:14px; padding:20px; margin-bottom:20px; box-shadow:0 4px 12px rgba(0,0,0,.05); }
+  h1 { font-size:22px; }
+  h2 { font-size:18px; margin-top:0; color:#0071e3; }
+  label { display:block; font-size:13px; font-weight:600; margin-bottom:5px; color:#86868b; }
+  input { width:100%; padding:12px; margin-bottom:15px; border:1px solid #d2d2d7; border-radius:8px; font-size:15px; box-sizing:border-box; background:#fbfbfd; }
+  .btn { background:#0071e3; color:#fff; font-weight:600; border:none; padding:14px; border-radius:10px; width:100%; cursor:pointer; font-size:16px; }
+  .btn:active { background:#005bb5; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .status { padding:12px; border-radius:8px; font-size:14px; font-weight:500; white-space:pre-wrap; display:none; margin-top:10px; }
+  .success { background:#e8f5e9; color:#2e7d32; border:1px solid #c8e6c9; }
+  .error { background:#ffebee; color:#c62828; border:1px solid #ffcdd2; }
+  .file-item { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#f5f5f7; padding:10px 12px; border-radius:8px; margin-bottom:8px; font-size:14px; word-break:break-all; }
+  .file-item.dup { border:2px solid #ff9500; background:#fff8ec; }
+  .file-name { flex:1; font-family:monospace; }
+  .btn-del { background:#ff3b30; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
+  .btn-del:active { background:#c1271d; }
+  .hint { font-size:13px; color:#86868b; }
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:20px; z-index:1000; }
+  .modal-overlay.visible { display:flex; }
+  .modal-box { background:#fff; border-radius:14px; padding:24px 22px; max-width:340px; width:100%; box-shadow:0 12px 44px rgba(0,0,0,.25); text-align:center; }
+  .modal-message { font-size:15px; line-height:1.45; white-space:pre-wrap; margin-bottom:22px; }
+  .modal-actions { display:flex; gap:10px; }
+  .modal-btn { flex:1; padding:13px; border:none; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; }
+  .modal-btn-cancel { background:#e5e5ea; color:#1d1d1f; }
+  .modal-btn-confirm { background:#ff3b30; color:#fff; }
 </style>
 </head>
 <body>
-<h1>Supprime un fichier qui a un doublon avec la même casse</h1>
-<p>Nouvelle application créée avec Le Déployeur.</p>
-<p>Déploie ton code depuis l'étape 3 pour remplacer cette page.</p>
+<div class="container">
+  <h1>🧹 Supprime-doublon</h1>
+  <div class="card">
+    <h2>Réglages</h2>
+    <label for="user">Nom d'utilisateur GitHub</label>
+    <input type="text" id="user" placeholder="Ex : Hammerinhank">
+    <label for="token">Token d'accès (PAT, portée « repo »)</label>
+    <input type="password" id="token" placeholder="ghp_xxxxxxxx">
+    <label for="repo">Nom du dépôt</label>
+    <input type="text" id="repo" placeholder="Ex : test-app">
+    <label for="branch">Branche</label>
+    <input type="text" id="branch" placeholder="main" value="main">
+    <button class="btn" onclick="lister()">Lister les fichiers (avec leur vraie casse)</button>
+    <p class="hint" style="margin-bottom:0;">Les fichiers en double (même nom, casse différente) sont encadrés en orange. Vérifie bien lequel tu supprimes : garde <strong>index.html</strong> (minuscule), supprime <strong>Index.html</strong> (majuscule).</p>
+  </div>
+
+  <div class="card" id="files-card" style="display:none;">
+    <h2>Fichiers du dépôt</h2>
+    <div id="files-list"></div>
+  </div>
+
+  <div id="status" class="status"></div>
+</div>
+
+<div id="modal-overlay" class="modal-overlay">
+  <div class="modal-box">
+    <div id="modal-message" class="modal-message"></div>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="modal-btn modal-btn-cancel">Annuler</button>
+      <button id="modal-confirm" class="modal-btn modal-btn-confirm">Supprimer</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function val(id){ return document.getElementById(id).value.trim(); }
+  function headers(){ return { "Authorization": `token ${val('token')}`, "Accept": "application/vnd.github+json" }; }
+  function message(txt, type){
+    const b = document.getElementById('status');
+    b.style.display='block'; b.className='status '+type; b.textContent=txt;
+    b.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+  function verifier(){
+    if(!val('user') || !val('token') || !val('repo') || !val('branch')){
+      message("Remplis les quatre champs (utilisateur, token, dépôt, branche).", "error");
+      return false;
+    }
+    return true;
+  }
+  function confirmer(msg){
+    return new Promise(res=>{
+      if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      const o=document.getElementById('modal-overlay'), m=document.getElementById('modal-message'),
+            c=document.getElementById('modal-confirm'), a=document.getElementById('modal-cancel');
+      m.textContent=msg;
+      function net(){ o.classList.remove('visible'); c.removeEventListener('click',ok); a.removeEventListener('click',no); o.removeEventListener('click',fond); }
+      function ok(){ net(); res(true); }
+      function no(){ net(); res(false); }
+      function fond(e){ if(e.target===o){ net(); res(false); } }
+      c.addEventListener('click',ok); a.addEventListener('click',no); o.addEventListener('click',fond);
+      setTimeout(()=>o.classList.add('visible'),120);
+    });
+  }
+
+  // Récupère l'arbre complet du dépôt (chemins EXACTS, casse respectée).
+  async function getArbre(){
+    const u=val('user'), r=val('repo'), br=val('branch');
+    // 1) tête de branche
+    const refResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/ref/heads/${br}`, { headers: headers() });
+    if(!refResp.ok){ throw new Error(`Lecture de la branche impossible (${refResp.status}). Vérifie le nom du dépôt et de la branche.`); }
+    const ref = await refResp.json();
+    const headSha = ref.object.sha;
+    // 2) commit -> arbre
+    const cResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/commits/${headSha}`, { headers: headers() });
+    if(!cResp.ok) throw new Error(`Lecture du commit impossible (${cResp.status}).`);
+    const commit = await cResp.json();
+    // 3) arbre récursif
+    const tResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/trees/${commit.tree.sha}?recursive=1`, { headers: headers() });
+    if(!tResp.ok) throw new Error(`Lecture de l'arbre impossible (${tResp.status}).`);
+    const tree = await tResp.json();
+    return { headSha, tree };
+  }
+
+  let dernierArbre = null;
+
+  async function lister(){
+    if(!verifier()) return;
+    message("Chargement des fichiers…","success");
+    try{
+      const { headSha, tree } = await getArbre();
+      dernierArbre = { headSha, entries: tree.tree };
+      if(tree.truncated){
+        message("⚠️ Le dépôt est très gros et la liste est tronquée. Cet outil ne convient pas dans ce cas.","error");
+      }
+      const blobs = tree.tree.filter(e=>e.type==='blob');
+
+      // Repérage des doublons de casse
+      const parMinuscule = {};
+      blobs.forEach(e=>{ const k=e.path.toLowerCase(); (parMinuscule[k]=parMinuscule[k]||[]).push(e.path); });
+      const estDoublon = p => parMinuscule[p.toLowerCase()].length > 1;
+
+      const list = document.getElementById('files-list');
+      list.innerHTML = "";
+      blobs.sort((a,b)=>a.path.localeCompare(b.path)).forEach(e=>{
+        const div=document.createElement('div');
+        div.className='file-item'+(estDoublon(e.path)?' dup':'');
+        const name=document.createElement('div'); name.className='file-name'; name.textContent=e.path;
+        const btn=document.createElement('button'); btn.className='btn-del'; btn.textContent='Supprimer';
+        btn.addEventListener('click', ()=>supprimer(e.path, e.sha));
+        div.appendChild(name); div.appendChild(btn); list.appendChild(div);
+      });
+      document.getElementById('files-card').style.display='block';
+      const nbDup = Object.values(parMinuscule).filter(a=>a.length>1).length;
+      message(nbDup>0
+        ? `${blobs.length} fichier(s). ⚠️ ${nbDup} nom(s) en double par la casse — encadré(s) en orange.`
+        : `${blobs.length} fichier(s). Aucun doublon de casse détecté.`,
+        nbDup>0 ? "error" : "success");
+    }catch(err){
+      message("Erreur : "+err.message, "error");
+    }
+  }
+
+  // Supprime un fichier au chemin EXACT en reconstruisant l'arbre sans lui.
+  async function supprimer(pathExact, blobSha){
+    if(!verifier()) return;
+    const ok = await confirmer(
+      `Supprimer définitivement « ${pathExact} » ?\n\n`+
+      "Un commit sera créé. L'historique Git garde toujours une trace, "+
+      "mais le fichier disparaîtra de la branche."
+    );
+    if(!ok) return;
+
+    try{
+      message(`Suppression de « ${pathExact} »…`,"success");
+      const u=val('user'), r=val('repo'), br=val('branch');
+
+      // On repart de l'arbre le plus récent
+      const { headSha, tree } = await getArbre();
+
+      // Sécurité : le fichier existe-t-il toujours, à ce chemin EXACT ?
+      const cible = tree.tree.find(e=>e.type==='blob' && e.path===pathExact);
+      if(!cible){
+        message(`« ${pathExact} » n'existe plus à ce chemin exact. Recharge la liste.`,"error");
+        return;
+      }
+
+      // Nouvel arbre = tous les blobs SAUF celui-ci (reconstruit à partir de zéro,
+      // sans base_tree, pour que la suppression soit bien prise en compte).
+      const nouvelArbre = tree.tree
+        .filter(e=>e.type==='blob' && e.path!==pathExact)
+        .map(e=>({ path:e.path, mode:e.mode, type:'blob', sha:e.sha }));
+
+      const treeResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/trees`, {
+        method:"POST", headers: headers(),
+        body: JSON.stringify({ tree: nouvelArbre })
+      });
+      if(!treeResp.ok){ const e=await treeResp.json().catch(()=>({})); throw new Error(`Création de l'arbre : ${e.message||treeResp.status}`); }
+      const newTree = await treeResp.json();
+
+      // Nouveau commit pointant sur cet arbre
+      const commitResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/commits`, {
+        method:"POST", headers: headers(),
+        body: JSON.stringify({ message:`Suppression du doublon ${pathExact}`, tree:newTree.sha, parents:[headSha] })
+      });
+      if(!commitResp.ok){ const e=await commitResp.json().catch(()=>({})); throw new Error(`Création du commit : ${e.message||commitResp.status}`); }
+      const newCommit = await commitResp.json();
+
+      // On avance la branche sur ce commit
+      const patchResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/refs/heads/${br}`, {
+        method:"PATCH", headers: headers(),
+        body: JSON.stringify({ sha:newCommit.sha, force:false })
+      });
+      if(!patchResp.ok){ const e=await patchResp.json().catch(()=>({})); throw new Error(`Mise à jour de la branche : ${e.message||patchResp.status}`); }
+
+      message(`✅ « ${pathExact} » supprimé (commit ${newCommit.sha.substring(0,7)}).`,"success");
+      lister(); // on rafraîchit
+    }catch(err){
+      message("Échec de la suppression : "+err.message,"error");
+    }
+  }
+</script>
 </body>
 </html>
