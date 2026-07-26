@@ -9,6 +9,7 @@
   .container { max-width:500px; margin:0 auto; }
   .card { background:#fff; border-radius:14px; padding:20px; margin-bottom:20px; box-shadow:0 4px 12px rgba(0,0,0,.05); }
   h1 { font-size:22px; }
+  .version { font-size:13px; font-weight:500; color:#86868b; margin-left:6px; }
   h2 { font-size:18px; margin-top:0; color:#0071e3; }
   label { display:block; font-size:13px; font-weight:600; margin-bottom:5px; color:#86868b; }
   input { width:100%; padding:12px; margin-bottom:15px; border:1px solid #d2d2d7; border-radius:8px; font-size:15px; box-sizing:border-box; background:#fbfbfd; }
@@ -18,9 +19,11 @@
   .status { padding:12px; border-radius:8px; font-size:14px; font-weight:500; white-space:pre-wrap; display:none; margin-top:10px; }
   .success { background:#e8f5e9; color:#2e7d32; border:1px solid #c8e6c9; }
   .error { background:#ffebee; color:#c62828; border:1px solid #ffcdd2; }
-  .file-item { display:flex; justify-content:space-between; align-items:center; gap:10px; background:#f5f5f7; padding:10px 12px; border-radius:8px; margin-bottom:8px; font-size:14px; word-break:break-all; }
+  .file-item { display:flex; justify-content:space-between; align-items:center; gap:8px; background:#f5f5f7; padding:10px 12px; border-radius:8px; margin-bottom:8px; font-size:14px; word-break:break-all; flex-wrap:wrap; }
   .file-item.dup { border:2px solid #ff9500; background:#fff8ec; }
-  .file-name { flex:1; font-family:monospace; }
+  .file-name { flex:1 1 100%; font-family:monospace; }
+  .btn-vue { background:#34c759; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
+  .btn-vue:active { background:#248a3d; }
   .btn-del { background:#ff3b30; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-del:active { background:#c1271d; }
   .hint { font-size:13px; color:#86868b; }
@@ -32,11 +35,18 @@
   .modal-btn { flex:1; padding:13px; border:none; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; }
   .modal-btn-cancel { background:#e5e5ea; color:#1d1d1f; }
   .modal-btn-confirm { background:#ff3b30; color:#fff; }
+  /* Aperçu plein écran d'une page HTML rendue */
+  .apercu-overlay { position:fixed; inset:0; background:#fff; display:none; flex-direction:column; z-index:2000; }
+  .apercu-overlay.visible { display:flex; }
+  .apercu-header { display:flex; align-items:center; gap:10px; padding:12px 16px; background:#1d1d1f; color:#fff; flex-shrink:0; }
+  .apercu-titre { flex:1; font-family:monospace; font-size:13px; word-break:break-all; }
+  .apercu-close { background:#ff3b30; color:#fff; border:none; padding:10px 18px; border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; flex-shrink:0; }
+  .apercu-frame { flex:1; width:100%; border:none; background:#fff; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>🧹 Supprime-doublon</h1>
+  <h1>🧹 Supprime-doublon <span class="version" id="version"></span></h1>
   <div class="card">
     <h2>Réglages</h2>
     <label for="user">Nom d'utilisateur GitHub</label>
@@ -48,7 +58,7 @@
     <label for="branch">Branche</label>
     <input type="text" id="branch" placeholder="main" value="main">
     <button class="btn" onclick="lister()">Lister les fichiers (avec leur vraie casse)</button>
-    <p class="hint" style="margin-bottom:0;">Les fichiers en double (même nom, casse différente) sont encadrés en orange. Vérifie bien lequel tu supprimes : garde <strong>index.html</strong> (minuscule), supprime <strong>Index.html</strong> (majuscule).</p>
+    <p class="hint" style="margin-bottom:0;">Les fichiers en double (même nom, casse différente) sont encadrés en orange. Vérifie bien lequel tu supprimes : garde <strong>index.html</strong> (minuscule), supprime <strong>Index.html</strong> (majuscule). Un bouton <strong>👁 Aperçu</strong> apparaît sur les fichiers HTML pour les voir tels qu'affichés dans un navigateur.</p>
     <button class="btn" onclick="oublierChamps()" style="background:#6e6e73; margin-top:12px;">Effacer les identifiants mémorisés</button>
   </div>
 
@@ -70,7 +80,23 @@
   </div>
 </div>
 
+<!-- Aperçu plein écran : la page HTML est rendue dans une iframe, comme dans un navigateur -->
+<div id="apercu-overlay" class="apercu-overlay">
+  <div class="apercu-header">
+    <span id="apercu-titre" class="apercu-titre"></span>
+    <button id="apercu-close" class="apercu-close">Fermer</button>
+  </div>
+  <iframe id="apercu-frame" class="apercu-frame"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"></iframe>
+</div>
+
 <script>
+  // ------------------------------------------------------------------
+  // Numéro de version : un seul endroit à modifier pour le faire évoluer.
+  // ------------------------------------------------------------------
+  const VERSION = "1.1";
+  document.getElementById('version').textContent = "v" + VERSION;
+
   function val(id){ return document.getElementById(id).value.trim(); }
   function headers(){ return { "Authorization": `token ${val('token')}`, "Accept": "application/vnd.github+json" }; }
   function message(txt, type){
@@ -85,6 +111,12 @@
     }
     return true;
   }
+
+  // Test simple et robuste pour savoir si un fichier est du HTML :
+  // on regarde juste si le chemin se termine par .html ou .htm (toute casse).
+  // Pas besoin de télécharger ni d'analyser le contenu.
+  function estHtml(chemin){ return /\.html?$/i.test(chemin); }
+
   function confirmer(msg){
     return new Promise(res=>{
       if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -147,9 +179,17 @@
         const div=document.createElement('div');
         div.className='file-item'+(estDoublon(e.path)?' dup':'');
         const name=document.createElement('div'); name.className='file-name'; name.textContent=e.path;
+        div.appendChild(name);
+        // Fichier HTML : bouton d'aperçu (page rendue comme dans un navigateur).
+        if(estHtml(e.path)){
+          const vue=document.createElement('button'); vue.className='btn-vue'; vue.textContent='👁 Aperçu';
+          vue.addEventListener('click', ()=>apercu(e.path, e.sha));
+          div.appendChild(vue);
+        }
         const btn=document.createElement('button'); btn.className='btn-del'; btn.textContent='Supprimer';
         btn.addEventListener('click', ()=>supprimer(e.path, e.sha));
-        div.appendChild(name); div.appendChild(btn); list.appendChild(div);
+        div.appendChild(btn);
+        list.appendChild(div);
       });
       document.getElementById('files-card').style.display='block';
       const nbDup = Object.values(parMinuscule).filter(a=>a.length>1).length;
@@ -159,6 +199,58 @@
         nbDup>0 ? "error" : "success");
     }catch(err){
       message("Erreur : "+err.message, "error");
+    }
+  }
+
+  // ---------- Aperçu d'un fichier HTML ----------
+  // Décode le contenu base64 renvoyé par l'API GitHub en respectant l'UTF-8
+  // (indispensable pour les accents français).
+  function decodeBase64Utf8(b64){
+    const binaire = atob(b64.replace(/\s/g,''));
+    const octets = Uint8Array.from(binaire, c => c.charCodeAt(0));
+    return new TextDecoder('utf-8').decode(octets);
+  }
+
+  let apercuUrl = null;
+
+  function ouvrirApercu(titre, html){
+    const o=document.getElementById('apercu-overlay');
+    const t=document.getElementById('apercu-titre');
+    const f=document.getElementById('apercu-frame');
+    if(apercuUrl){ URL.revokeObjectURL(apercuUrl); apercuUrl=null; }
+    // On rend le HTML tel quel dans une iframe : scripts, styles et mise en
+    // page s'exécutent comme dans un vrai navigateur (idéal pour tes pages
+    // monofichier autonomes). Les ressources en chemin relatif vers le dépôt
+    // ne seront pas résolues, mais c'est sans effet sur ce type de page.
+    apercuUrl = URL.createObjectURL(new Blob([html], {type:'text/html'}));
+    t.textContent = titre;
+    f.src = apercuUrl;
+    o.classList.add('visible');
+  }
+
+  function fermerApercu(){
+    const o=document.getElementById('apercu-overlay');
+    const f=document.getElementById('apercu-frame');
+    o.classList.remove('visible');
+    f.src='about:blank';
+    if(apercuUrl){ URL.revokeObjectURL(apercuUrl); apercuUrl=null; }
+  }
+  document.getElementById('apercu-close').addEventListener('click', fermerApercu);
+
+  async function apercu(pathExact, blobSha){
+    if(!verifier()) return;
+    message(`Chargement de l'aperçu de « ${pathExact} »…`,"success");
+    try{
+      const u=val('user'), r=val('repo');
+      // On lit le blob par son SHA (objet immuable) : contenu en base64.
+      const resp = await fetch(`https://api.github.com/repos/${u}/${r}/git/blobs/${blobSha}`, { headers: headers() });
+      if(!resp.ok) throw new Error(`Lecture du fichier impossible (${resp.status}).`);
+      const blob = await resp.json();
+      const html = blob.encoding === 'base64' ? decodeBase64Utf8(blob.content) : blob.content;
+      ouvrirApercu(pathExact, html);
+      message(`Aperçu de « ${pathExact} » ouvert.`,"success");
+    }catch(err){
+      message("Aperçu impossible : "+err.message,"error");
     }
   }
 
