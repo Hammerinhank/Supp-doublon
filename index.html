@@ -13,6 +13,10 @@
   h2 { font-size:18px; margin-top:0; color:#0071e3; }
   label { display:block; font-size:13px; font-weight:600; margin-bottom:5px; color:#86868b; }
   input { width:100%; padding:12px; margin-bottom:15px; border:1px solid #d2d2d7; border-radius:8px; font-size:15px; box-sizing:border-box; background:#fbfbfd; }
+  .combo-row { display:flex; gap:8px; margin-bottom:15px; }
+  select { flex:1; min-width:0; padding:12px; border:1px solid #d2d2d7; border-radius:8px; font-size:15px; background:#fbfbfd; color:#1d1d1f; -webkit-appearance:none; appearance:none; }
+  .btn-charger { flex-shrink:0; background:#0071e3; color:#fff; border:none; padding:0 16px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .btn-charger:active { background:#005bb5; }
   .btn { background:#0071e3; color:#fff; font-weight:600; border:none; padding:14px; border-radius:10px; width:100%; cursor:pointer; font-size:16px; }
   .btn:active { background:#005bb5; }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
@@ -54,7 +58,13 @@
     <label for="token">Token d'accès (PAT, portée « repo »)</label>
     <input type="password" id="token" placeholder="ghp_xxxxxxxx">
     <label for="repo">Nom du dépôt</label>
-    <input type="text" id="repo" placeholder="Ex : test-app">
+    <input type="text" id="repo" placeholder="Ex : test-app" style="margin-bottom:8px;">
+    <div class="combo-row">
+      <select id="repo-select" onchange="choisirDepot()">
+        <option value="">— ou choisis un dépôt dans la liste —</option>
+      </select>
+      <button type="button" class="btn-charger" onclick="chargerDepots()">🔄 Charger</button>
+    </div>
     <label for="branch">Branche</label>
     <input type="text" id="branch" placeholder="main" value="main">
     <button class="btn" onclick="lister()">Lister les fichiers (avec leur vraie casse)</button>
@@ -94,7 +104,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "1.1";
+  const VERSION = "1.2";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -200,6 +210,50 @@
     }catch(err){
       message("Erreur : "+err.message, "error");
     }
+  }
+
+  // ---------- Liste déroulante des dépôts ----------
+  // Charge tes dépôts (le token suffit à t'identifier) et remplit le menu.
+  // Choisir une entrée renseigne automatiquement le nom du dépôt et le
+  // propriétaire, tout en laissant le champ texte libre pour une saisie manuelle.
+  async function chargerDepots(){
+    if(!val('token')){ message("Saisis d'abord ton token pour charger la liste des dépôts.","error"); return; }
+    message("Chargement de la liste de tes dépôts…","success");
+    try{
+      const depots = [];
+      // Pagination : on lit page par page jusqu'à en avoir moins qu'une pleine page.
+      for(let page=1; page<=10; page++){
+        const url = `https://api.github.com/user/repos?per_page=100&page=${page}&sort=full_name&_cb=${Date.now()}`;
+        const resp = await fetch(url, { headers: headers(), cache:"no-store" });
+        if(!resp.ok){ const e=await resp.json().catch(()=>({})); throw new Error(e.message||resp.status); }
+        const lot = await resp.json();
+        depots.push(...lot);
+        if(lot.length < 100) break;
+      }
+      const sel = document.getElementById('repo-select');
+      const actuel = val('repo');
+      sel.innerHTML = '<option value="">— ou choisis un dépôt dans la liste —</option>';
+      depots.sort((a,b)=>a.full_name.localeCompare(b.full_name)).forEach(d=>{
+        const o=document.createElement('option');
+        o.value=d.name; o.dataset.owner=d.owner.login;
+        o.textContent=d.full_name + (d.private?' 🔒':'');
+        if(d.name===actuel) o.selected=true;
+        sel.appendChild(o);
+      });
+      message(`${depots.length} dépôt(s) chargé(s). Choisis-en un dans la liste.`, "success");
+    }catch(err){
+      message("Impossible de charger les dépôts : "+err.message,"error");
+    }
+  }
+
+  function choisirDepot(){
+    const sel=document.getElementById('repo-select');
+    const opt=sel.options[sel.selectedIndex];
+    if(!opt || !opt.value) return;
+    document.getElementById('repo').value = opt.value;
+    // Utile si le dépôt appartient à une organisation : on aligne le propriétaire.
+    if(opt.dataset.owner) document.getElementById('user').value = opt.dataset.owner;
+    sauverChamps();
   }
 
   // ---------- Aperçu d'un fichier HTML ----------
