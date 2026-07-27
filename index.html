@@ -35,6 +35,8 @@
   .status { padding:12px; border-radius:8px; font-size:14px; font-weight:500; white-space:pre-wrap; display:none; margin-top:10px; }
   .success { background:#e8f5e9; color:#2e7d32; border:1px solid #c8e6c9; }
   .error { background:#ffebee; color:#c62828; border:1px solid #ffcdd2; }
+  .btn-statut { display:block; margin-top:12px; background:#0071e3; color:#fff; border:none; padding:10px 16px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; }
+  .btn-statut:active { background:#005bb5; }
   .file-item { display:flex; justify-content:space-between; align-items:center; gap:8px; background:#f5f5f7; padding:10px 12px; border-radius:8px; margin-bottom:8px; font-size:14px; word-break:break-all; flex-wrap:wrap; }
   .file-item.dup { border:2px solid #ff9500; background:#fff8ec; }
   .file-name { flex:1 1 100%; font-family:monospace; }
@@ -141,7 +143,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "1.7";
+  const VERSION = "1.8";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -149,6 +151,16 @@
   function message(txt, type){
     const b = document.getElementById('status');
     b.style.display='block'; b.className='status '+type; b.textContent=txt;
+    b.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+  // Greffe un bouton d'action sous le dernier message (retiré au message suivant,
+  // puisque message() réécrit le contenu de la zone de statut).
+  function ajouterBoutonStatut(label, action){
+    const b = document.getElementById('status');
+    const btn = document.createElement('button');
+    btn.className = 'btn-statut'; btn.textContent = label;
+    btn.addEventListener('click', action);
+    b.appendChild(btn);
     b.scrollIntoView({behavior:'smooth', block:'nearest'});
   }
   function verifier(){
@@ -242,19 +254,26 @@
     if(repoResp && repoResp.ok){
       // Le dépôt EST accessible → c'est la branche qui n'existe pas.
       const repo = await repoResp.json().catch(()=>({}));
-      const parDefaut = repo.default_branch ? `\nBranche par défaut : « ${repo.default_branch} ».` : '';
-      let dispo = '';
+      let noms = [];
       try{
         const bResp = await fetch(`https://api.github.com/repos/${u}/${r}/branches?per_page=100`, { headers: headers() });
-        if(bResp.ok){
-          const noms = (await bResp.json()).map(b=>b.name);
-          if(noms.length) dispo = `\nBranches existantes : ${noms.slice(0,12).map(n=>`« ${n} »`).join(', ')}${noms.length>12?'…':''}.`;
-        }
+        if(bResp.ok) noms = (await bResp.json()).map(b=>b.name);
       }catch(_){}
-      return new Error(
+
+      // Meilleure candidate : la branche par défaut si elle existe, sinon la
+      // première branche existante (cas fréquent : une seule branche « master »).
+      let candidate = repo.default_branch || null;
+      if(noms.length && (!candidate || !noms.includes(candidate))) candidate = noms[0];
+
+      const parDefaut = repo.default_branch ? `\nBranche par défaut : « ${repo.default_branch} ».` : '';
+      const dispo = noms.length ? `\nBranches existantes : ${noms.slice(0,12).map(n=>`« ${n} »`).join(', ')}${noms.length>12?'…':''}.` : '';
+      const err = new Error(
         `Le dépôt « ${u}/${r} » existe${repo.private?' (privé)':''} et est accessible avec ce token, `+
-        `mais la branche « ${br} » est introuvable.${parDefaut}${dispo}\n→ Corrige le nom de la branche dans Réglages.`
+        `mais la branche « ${br} » est introuvable.${parDefaut}${dispo}`+
+        (candidate ? '' : `\n→ Corrige le nom de la branche dans Réglages.`)
       );
+      if(candidate) err.brancheCandidate = candidate;   // exploité pour proposer un bouton de correction
+      return err;
     }
 
     // --- Le dépôt n'est pas visible avec ce token : privé sans accès, ou inexistant. ---
@@ -385,6 +404,15 @@
         ? "Impossible de contacter GitHub. Vérifie ta connexion Internet, puis réessaie."
         : err.message;
       message("❌ "+txt, "error");
+      // Cas « branche introuvable mais dépôt accessible » : on propose de
+      // basculer directement sur la branche existante détectée.
+      if(err.brancheCandidate){
+        ajouterBoutonStatut(`Utiliser la branche « ${err.brancheCandidate} »`, ()=>{
+          document.getElementById('branch').value = err.brancheCandidate;
+          sauverChamps();
+          lister();
+        });
+      }
     }
   }
 
