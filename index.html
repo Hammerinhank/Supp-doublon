@@ -44,6 +44,8 @@
   .btn-vue:active { background:#248a3d; }
   .btn-json { background:#5856d6; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-json:active { background:#3e3ca8; }
+  .btn-txt { background:#30b0c7; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
+  .btn-txt:active { background:#2790a3; }
   .btn-del { background:#ff3b30; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-del:active { background:#c1271d; }
   .hint { font-size:13px; color:#86868b; }
@@ -70,6 +72,8 @@
   .json-type { color:#1d1d1f; }
   .json-info { color:#86868b; }
   .json-valeur { color:#248a3d; }
+  /* Vue « contenu brut » d'un fichier texte ou code (.txt / .py) */
+  .texte-content { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; line-height:1.5; white-space:pre; -webkit-overflow-scrolling:touch; }
 </style>
 </head>
 <body>
@@ -139,11 +143,20 @@
   <div id="json-content" class="json-content"></div>
 </div>
 
+<!-- Contenu brut d'un fichier texte ou code (.txt / .py) -->
+<div id="texte-overlay" class="apercu-overlay">
+  <div class="apercu-header">
+    <span id="texte-titre" class="apercu-titre"></span>
+    <button id="texte-close" class="apercu-close">Fermer</button>
+  </div>
+  <pre id="texte-content" class="texte-content"></pre>
+</div>
+
 <script>
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.0";
+  const VERSION = "2.1";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -191,6 +204,9 @@
 
   // Même logique pour le JSON : on teste juste l'extension .json (toute casse).
   function estJson(chemin){ return /\.json$/i.test(chemin); }
+
+  // Fichiers texte / code affichables tels quels : .txt et .py.
+  function estTexte(chemin){ return /\.(txt|py)$/i.test(chemin); }
 
   function confirmer(msg){
     return new Promise(res=>{
@@ -392,6 +408,12 @@
           const st=document.createElement('button'); st.className='btn-json'; st.textContent='{ } Structure';
           st.addEventListener('click', ()=>structureJson(e.path, e.sha));
           div.appendChild(st);
+        }
+        // Fichier texte / code : bouton d'affichage du contenu brut.
+        if(estTexte(e.path)){
+          const vt=document.createElement('button'); vt.className='btn-txt'; vt.textContent='📄 Voir';
+          vt.addEventListener('click', ()=>voirTexte(e.path, e.sha));
+          div.appendChild(vt);
         }
         const btn=document.createElement('button'); btn.className='btn-del'; btn.textContent='Supprimer';
         btn.addEventListener('click', ()=>supprimer(e.path, e.sha));
@@ -681,6 +703,32 @@
   }
   function fermerStructure(){ document.getElementById('json-overlay').classList.remove('visible'); }
   document.getElementById('json-close').addEventListener('click', fermerStructure);
+
+  // ---------- Contenu brut d'un fichier texte / code (.txt / .py) ----------
+  function ouvrirTexte(titre, contenu){
+    document.getElementById('texte-titre').textContent = titre;
+    // textContent : le contenu s'affiche tel quel, sans interprétation ni risque d'injection.
+    document.getElementById('texte-content').textContent = contenu;
+    document.getElementById('texte-overlay').classList.add('visible');
+  }
+  function fermerTexte(){ document.getElementById('texte-overlay').classList.remove('visible'); }
+  document.getElementById('texte-close').addEventListener('click', fermerTexte);
+
+  async function voirTexte(pathExact, blobSha){
+    if(!verifier()) return;
+    message(`Chargement de « ${pathExact} »…`,"success");
+    try{
+      const u=val('user'), r=val('repo');
+      const resp = await fetch(`https://api.github.com/repos/${u}/${r}/git/blobs/${blobSha}`, { headers: headers() });
+      if(!resp.ok) throw await erreurGitHub(resp, "Lecture du fichier impossible");
+      const blob = await resp.json();
+      const texte = blob.encoding === 'base64' ? decodeBase64Utf8(blob.content) : blob.content;
+      ouvrirTexte(pathExact, texte);
+      message(`Contenu de « ${pathExact} » affiché.`,"success");
+    }catch(err){
+      message("Lecture impossible : "+err.message,"error");
+    }
+  }
 
   async function structureJson(pathExact, blobSha){
     if(!verifier()) return;
