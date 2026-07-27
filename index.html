@@ -143,7 +143,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "1.9";
+  const VERSION = "2.0";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -398,6 +398,9 @@
         div.appendChild(btn);
         list.appendChild(div);
       });
+      // Le listing a réussi → la branche est bonne : on la mémorise pour ce dépôt,
+      // avec le nombre de fichiers (affiché ensuite dans la liste déroulante).
+      ecrireDepotInfo(val('user'), val('repo'), { branch: val('branch'), nbFichiers: blobs.length });
       document.getElementById('files-card').style.display='block';
       const nbDup = Object.values(parMinuscule).filter(a=>a.length>1).length;
       message(nbDup>0
@@ -436,6 +439,21 @@
   // Un seul champ : tu tapes le nom à la main, OU tu déroules la liste de tes
   // dépôts avec le bouton ▼. Choisir une entrée remplit le même champ.
   let depotsCharges = [];   // [{name, owner, prive}] mis en cache après chargement
+
+  // Mémoire persistante par dépôt : branche déjà validée + nombre de fichiers
+  // trouvés lors du dernier listing. Sert à ne plus redemander la branche et à
+  // afficher le compte de fichiers dans la liste déroulante.
+  const CLE_DEPOTS = 'supprime_doublon_depots';
+  function lireInfosDepots(){
+    try { return JSON.parse(localStorage.getItem(CLE_DEPOTS)) || {}; } catch(_){ return {}; }
+  }
+  function infoDepot(owner, name){ return lireInfosDepots()[`${owner}/${name}`] || null; }
+  function ecrireDepotInfo(owner, name, infos){
+    const tout = lireInfosDepots();
+    const cle = `${owner}/${name}`;
+    tout[cle] = Object.assign(tout[cle] || {}, infos);
+    try { localStorage.setItem(CLE_DEPOTS, JSON.stringify(tout)); } catch(_){}
+  }
 
   // Récupère tes dépôts (le token suffit à t'identifier). Renvoie true si OK.
   async function chargerDepots(){
@@ -484,7 +502,9 @@
     liste.forEach(d=>{
       const o = document.createElement('div');
       o.className = 'combo-opt';
-      o.textContent = d.name + (d.prive ? ' 🔒' : '');
+      const info = infoDepot(d.owner, d.name);
+      const compte = (info && typeof info.nbFichiers === 'number') ? ` (${info.nbFichiers})` : '';
+      o.textContent = d.name + compte + (d.prive ? ' 🔒' : '');
       o.addEventListener('click', ()=>choisirDepot(d.name, d.owner));
       panel.appendChild(o);
     });
@@ -524,6 +544,9 @@
     document.getElementById('repo').value = name;
     // Aligne le propriétaire seulement si besoin (utile pour un dépôt d'organisation).
     if(owner && owner !== val('user')) document.getElementById('user').value = owner;
+    // Branche déjà validée pour ce dépôt : on la remet pour ne pas la redemander.
+    const info = infoDepot(owner || val('user'), name);
+    if(info && info.branch) document.getElementById('branch').value = info.branch;
     fermerListe();
     sauverChamps();
   }
