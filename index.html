@@ -40,6 +40,8 @@
   .file-name { flex:1 1 100%; font-family:monospace; }
   .btn-vue { background:#34c759; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-vue:active { background:#248a3d; }
+  .btn-json { background:#5856d6; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
+  .btn-json:active { background:#3e3ca8; }
   .btn-del { background:#ff3b30; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-del:active { background:#c1271d; }
   .hint { font-size:13px; color:#86868b; }
@@ -58,6 +60,14 @@
   .apercu-titre { flex:1; font-family:monospace; font-size:13px; word-break:break-all; }
   .apercu-close { background:#ff3b30; color:#fff; border:none; padding:10px 18px; border-radius:8px; font-size:15px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .apercu-frame { flex:1; width:100%; border:none; background:#fff; }
+  /* Vue « structure » d'un fichier JSON */
+  .json-content { flex:1; overflow:auto; padding:14px 16px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; line-height:1.6; -webkit-overflow-scrolling:touch; }
+  .json-enfants { margin-left:14px; border-left:1px solid #e5e5ea; padding-left:12px; }
+  .json-ligne { white-space:nowrap; }
+  .json-cle { color:#0071e3; font-weight:600; }
+  .json-type { color:#1d1d1f; }
+  .json-info { color:#86868b; }
+  .json-valeur { color:#248a3d; }
 </style>
 </head>
 <body>
@@ -118,11 +128,20 @@
           sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox"></iframe>
 </div>
 
+<!-- Structure d'un fichier JSON (arborescence des clés et types) -->
+<div id="json-overlay" class="apercu-overlay">
+  <div class="apercu-header">
+    <span id="json-titre" class="apercu-titre"></span>
+    <button id="json-close" class="apercu-close">Fermer</button>
+  </div>
+  <div id="json-content" class="json-content"></div>
+</div>
+
 <script>
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "1.5";
+  const VERSION = "1.6";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -157,6 +176,9 @@
   // on regarde juste si le chemin se termine par .html ou .htm (toute casse).
   // Pas besoin de télécharger ni d'analyser le contenu.
   function estHtml(chemin){ return /\.html?$/i.test(chemin); }
+
+  // Même logique pour le JSON : on teste juste l'extension .json (toute casse).
+  function estJson(chemin){ return /\.json$/i.test(chemin); }
 
   function confirmer(msg){
     return new Promise(res=>{
@@ -249,6 +271,12 @@
           const vue=document.createElement('button'); vue.className='btn-vue'; vue.textContent='👁 Aperçu';
           vue.addEventListener('click', ()=>apercu(e.path, e.sha));
           div.appendChild(vue);
+        }
+        // Fichier JSON : bouton d'affichage de la structure (clés et types).
+        if(estJson(e.path)){
+          const st=document.createElement('button'); st.className='btn-json'; st.textContent='{ } Structure';
+          st.addEventListener('click', ()=>structureJson(e.path, e.sha));
+          div.appendChild(st);
         }
         const btn=document.createElement('button'); btn.className='btn-del'; btn.textContent='Supprimer';
         btn.addEventListener('click', ()=>supprimer(e.path, e.sha));
@@ -410,6 +438,115 @@
     if(apercuUrl){ URL.revokeObjectURL(apercuUrl); apercuUrl=null; }
   }
   document.getElementById('apercu-close').addEventListener('click', fermerApercu);
+
+  // ---------- Structure d'un fichier JSON ----------
+  function echapper(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+  function tronquer(s,n){ s=String(s); return s.length>n ? s.slice(0,n)+'…' : s; }
+
+  function typeDe(v){
+    if(v===null) return 'null';
+    if(Array.isArray(v)) return 'array';
+    return typeof v;   // 'object' | 'string' | 'number' | 'boolean'
+  }
+
+  // Type dominant des éléments d'un tableau ('mixte' si plusieurs types).
+  function typesTableau(arr){
+    const ts = new Set(arr.map(typeDe));
+    return ts.size === 1 ? [...ts][0] : 'mixte';
+  }
+
+  // Élément représentatif d'un tableau : pour des objets, on RÉUNIT les clés
+  // rencontrées (certains éléments peuvent avoir des champs optionnels) ;
+  // pour des tableaux, on prend le premier ; sinon le premier élément.
+  function representantTableau(arr){
+    const objets = arr.filter(e=>e && typeof e==='object' && !Array.isArray(e));
+    if(objets.length){
+      const rep = {};
+      objets.forEach(o=>Object.keys(o).forEach(k=>{ if(!(k in rep)) rep[k]=o[k]; }));
+      return rep;
+    }
+    const tab = arr.find(Array.isArray);
+    return tab !== undefined ? tab : arr[0];
+  }
+
+  // Construit récursivement l'arborescence dans `container`.
+  function construireNoeud(cle, valeur, container){
+    const t = typeDe(valeur);
+    const ligne = document.createElement('div');
+    ligne.className = 'json-ligne';
+    let html = (cle !== null) ? `<span class="json-cle">${echapper(cle)}</span> : ` : '';
+
+    if(t === 'object'){
+      const n = Object.keys(valeur).length;
+      html += `<span class="json-type">{ } objet</span> <span class="json-info">(${n} clé${n>1?'s':''})</span>`;
+      ligne.innerHTML = html; container.appendChild(ligne);
+      const enfants = document.createElement('div'); enfants.className='json-enfants';
+      Object.keys(valeur).forEach(k=>construireNoeud(k, valeur[k], enfants));
+      container.appendChild(enfants);
+    }
+    else if(t === 'array'){
+      const n = valeur.length;
+      if(n === 0){
+        html += `<span class="json-type">[ ] tableau vide</span>`;
+        ligne.innerHTML = html; container.appendChild(ligne);
+        return;
+      }
+      const te = typesTableau(valeur);
+      const suffixe = te==='object' ? "d'objets"
+                    : te==='array'  ? 'de tableaux'
+                    : te==='mixte'  ? '(types mixtes)'
+                    : `de ${te}`;
+      html += `<span class="json-type">[ ] tableau</span> <span class="json-info">(${n} élément${n>1?'s':''}) ${suffixe}</span>`;
+      ligne.innerHTML = html; container.appendChild(ligne);
+      // On détaille la forme des éléments seulement s'ils sont structurés.
+      if(te === 'object'){
+        const rep = representantTableau(valeur);
+        const enfants = document.createElement('div'); enfants.className='json-enfants';
+        Object.keys(rep).forEach(k=>construireNoeud(k, rep[k], enfants));
+        container.appendChild(enfants);
+      } else if(te === 'array'){
+        const enfants = document.createElement('div'); enfants.className='json-enfants';
+        construireNoeud(null, representantTableau(valeur), enfants);
+        container.appendChild(enfants);
+      }
+    }
+    else {
+      let ex = '';
+      if(t === 'string') ex = `"${tronquer(valeur,40)}"`;
+      else if(t !== 'null') ex = String(valeur);
+      html += `<span class="json-type">${t}</span>` + (ex ? ` <span class="json-valeur">${echapper(ex)}</span>` : '');
+      ligne.innerHTML = html; container.appendChild(ligne);
+    }
+  }
+
+  function ouvrirStructure(titre, donnees){
+    const o=document.getElementById('json-overlay');
+    document.getElementById('json-titre').textContent = titre;
+    const c=document.getElementById('json-content'); c.innerHTML='';
+    construireNoeud(null, donnees, c);
+    o.classList.add('visible');
+  }
+  function fermerStructure(){ document.getElementById('json-overlay').classList.remove('visible'); }
+  document.getElementById('json-close').addEventListener('click', fermerStructure);
+
+  async function structureJson(pathExact, blobSha){
+    if(!verifier()) return;
+    message(`Analyse de « ${pathExact} »…`,"success");
+    try{
+      const u=val('user'), r=val('repo');
+      const resp = await fetch(`https://api.github.com/repos/${u}/${r}/git/blobs/${blobSha}`, { headers: headers() });
+      if(!resp.ok) throw await erreurGitHub(resp, "Lecture du fichier impossible");
+      const blob = await resp.json();
+      const texte = blob.encoding === 'base64' ? decodeBase64Utf8(blob.content) : blob.content;
+      let donnees;
+      try { donnees = JSON.parse(texte); }
+      catch(e){ throw new Error("le contenu n'est pas un JSON valide (" + e.message + ")"); }
+      ouvrirStructure(pathExact, donnees);
+      message(`Structure de « ${pathExact} » affichée.`,"success");
+    }catch(err){
+      message("Analyse impossible : "+err.message,"error");
+    }
+  }
 
   async function apercu(pathExact, blobSha){
     if(!verifier()) return;
