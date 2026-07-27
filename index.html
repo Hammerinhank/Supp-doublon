@@ -122,7 +122,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "1.4";
+  const VERSION = "1.5";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -173,6 +173,24 @@
     });
   }
 
+  // Traduit une réponse HTTP GitHub en erreur claire et actionnable.
+  // On y ajoute le message brut renvoyé par l'API quand il existe.
+  async function erreurGitHub(resp, contexte){
+    let data = {};
+    try { data = await resp.json(); } catch(_){}
+    const brut = (data && data.message) ? ` (GitHub : « ${data.message} »)` : '';
+    let aide;
+    switch(resp.status){
+      case 401: aide = "token invalide ou expiré — recrée un PAT et vérifie qu'il est collé en entier"; break;
+      case 403: aide = "accès refusé — le token n'a peut-être pas la portée « repo », ou la limite de requêtes GitHub est atteinte (réessaie dans quelques minutes)"; break;
+      case 404: aide = "introuvable — vérifie le nom d'utilisateur, le nom du dépôt (et sa casse) et la branche ; pour un dépôt privé, le token doit y avoir accès"; break;
+      case 409: aide = "le dépôt est vide (aucun commit) — il n'y a aucun fichier à lister"; break;
+      case 422: aide = "requête refusée par GitHub"; break;
+      default:  aide = `erreur HTTP ${resp.status}`;
+    }
+    return new Error(`${contexte} : ${aide}.${brut}`);
+  }
+
   // Récupère l'arbre complet du dépôt (chemins EXACTS, casse respectée).
   async function getArbre(){
     const u=val('user'), r=val('repo'), br=val('branch');
@@ -182,16 +200,16 @@
     // forward". On force donc une lecture réseau fraîche à chaque appel.
     const refUrl = `https://api.github.com/repos/${u}/${r}/git/ref/heads/${br}?_cb=${Date.now()}`;
     const refResp = await fetch(refUrl, { headers: headers(), cache: "no-store" });
-    if(!refResp.ok){ throw new Error(`Lecture de la branche impossible (${refResp.status}). Vérifie le nom du dépôt et de la branche.`); }
+    if(!refResp.ok) throw await erreurGitHub(refResp, "Lecture de la branche impossible");
     const ref = await refResp.json();
     const headSha = ref.object.sha;
     // 2) commit -> arbre (objets immuables, adressés par SHA : le cache est sans risque ici)
     const cResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/commits/${headSha}`, { headers: headers() });
-    if(!cResp.ok) throw new Error(`Lecture du commit impossible (${cResp.status}).`);
+    if(!cResp.ok) throw await erreurGitHub(cResp, "Lecture du commit impossible");
     const commit = await cResp.json();
     // 3) arbre récursif
     const tResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/trees/${commit.tree.sha}?recursive=1`, { headers: headers() });
-    if(!tResp.ok) throw new Error(`Lecture de l'arbre impossible (${tResp.status}).`);
+    if(!tResp.ok) throw await erreurGitHub(tResp, "Lecture de l'arbre impossible");
     const tree = await tResp.json();
     return { headSha, tree };
   }
@@ -200,6 +218,11 @@
 
   async function lister(){
     if(!verifier()) return;
+    // On repart d'une liste vide : les fichiers du dépôt précédent ne doivent
+    // pas rester affichés, surtout si le nouveau chargement échoue.
+    document.getElementById('files-card').style.display='none';
+    document.getElementById('files-list').innerHTML='';
+    dernierArbre = null;
     message("Chargement des fichiers…","success");
     try{
       const { headSha, tree } = await getArbre();
@@ -239,7 +262,15 @@
         : `${blobs.length} fichier(s). Aucun doublon de casse détecté.`,
         nbDup>0 ? "error" : "success");
     }catch(err){
-      message("Erreur : "+err.message, "error");
+      // La liste reste masquée/vide (on l'a réinitialisée en début d'appel).
+      document.getElementById('files-card').style.display='none';
+      document.getElementById('files-list').innerHTML='';
+      dernierArbre = null;
+      // Une TypeError de fetch = pas de réseau / requête bloquée, pas une réponse GitHub.
+      const txt = (err instanceof TypeError)
+        ? "Impossible de contacter GitHub. Vérifie ta connexion Internet, puis réessaie."
+        : err.message;
+      message("❌ "+txt, "error");
     }
   }
 
@@ -387,7 +418,7 @@
       const u=val('user'), r=val('repo');
       // On lit le blob par son SHA (objet immuable) : contenu en base64.
       const resp = await fetch(`https://api.github.com/repos/${u}/${r}/git/blobs/${blobSha}`, { headers: headers() });
-      if(!resp.ok) throw new Error(`Lecture du fichier impossible (${resp.status}).`);
+      if(!resp.ok) throw await erreurGitHub(resp, "Lecture du fichier impossible");
       const blob = await resp.json();
       const html = blob.encoding === 'base64' ? decodeBase64Utf8(blob.content) : blob.content;
       ouvrirApercu(pathExact, html);
