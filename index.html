@@ -141,7 +141,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "1.6";
+  const VERSION = "1.7";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -213,6 +213,92 @@
     return new Error(`${contexte} : ${aide}.${brut}`);
   }
 
+  // Diagnostic approfondi quand la lecture de la branche renvoie une erreur.
+  // Objectif : distinguer « branche inexistante » (dépôt accessible) de
+  // « dépôt invisible » (privé sans accès, ou inexistant), et vérifier le
+  // token, pour donner un message précis et actionnable.
+  async function diagnostiquerAcces(resp, u, r, br){
+    if(resp.status === 401){
+      return new Error("Token invalide ou expiré : GitHub ne reconnaît pas ce PAT.\n→ Recrée un token d'accès et recolle-le en entier dans Réglages.");
+    }
+    if(resp.status === 403){
+      if(resp.headers.get('X-RateLimit-Remaining') === '0'){
+        const reset = Number(resp.headers.get('X-RateLimit-Reset')||0) * 1000;
+        const quand = reset ? new Date(reset).toLocaleTimeString() : 'un moment';
+        return new Error(`Limite de requêtes GitHub atteinte.\n→ Réessaie après ${quand}.`);
+      }
+      return new Error("Accès refusé (403). Le token n'a probablement pas la portée « repo ».\n→ Recrée un token classique en cochant « repo ».");
+    }
+    if(resp.status !== 404){
+      return await erreurGitHub(resp, "Lecture de la branche impossible");
+    }
+
+    // --- 404 : le dépôt lui-même, ou seulement la branche ? ---
+    let repoResp = null;
+    try{
+      repoResp = await fetch(`https://api.github.com/repos/${u}/${r}?_cb=${Date.now()}`, { headers: headers(), cache:"no-store" });
+    }catch(_){}
+
+    if(repoResp && repoResp.ok){
+      // Le dépôt EST accessible → c'est la branche qui n'existe pas.
+      const repo = await repoResp.json().catch(()=>({}));
+      const parDefaut = repo.default_branch ? `\nBranche par défaut : « ${repo.default_branch} ».` : '';
+      let dispo = '';
+      try{
+        const bResp = await fetch(`https://api.github.com/repos/${u}/${r}/branches?per_page=100`, { headers: headers() });
+        if(bResp.ok){
+          const noms = (await bResp.json()).map(b=>b.name);
+          if(noms.length) dispo = `\nBranches existantes : ${noms.slice(0,12).map(n=>`« ${n} »`).join(', ')}${noms.length>12?'…':''}.`;
+        }
+      }catch(_){}
+      return new Error(
+        `Le dépôt « ${u}/${r} » existe${repo.private?' (privé)':''} et est accessible avec ce token, `+
+        `mais la branche « ${br} » est introuvable.${parDefaut}${dispo}\n→ Corrige le nom de la branche dans Réglages.`
+      );
+    }
+
+    // --- Le dépôt n'est pas visible avec ce token : privé sans accès, ou inexistant. ---
+    // On interroge le token (validité + portées) pour trancher au mieux.
+    let login = null, scopes = null, tokenValide = true;
+    try{
+      const uResp = await fetch(`https://api.github.com/user?_cb=${Date.now()}`, { headers: headers(), cache:"no-store" });
+      if(uResp.status === 401) tokenValide = false;
+      else if(uResp.ok){
+        login = (await uResp.json()).login;
+        scopes = uResp.headers.get('X-OAuth-Scopes'); // null pour un token « fine-grained »
+      }
+    }catch(_){}
+
+    if(!tokenValide){
+      return new Error("Token invalide ou expiré : GitHub ne reconnaît pas ce PAT.\n→ Recrée un token d'accès et recolle-le en entier dans Réglages.");
+    }
+
+    // Token classique SANS portée « repo » → il ne peut pas voir les dépôts privés.
+    if(scopes !== null && !/(^|,\s*)repo(\s*,|$)/.test(scopes)){
+      return new Error(
+        `Le dépôt « ${u}/${r} » est introuvable avec ce token.\n`+
+        `Ce token classique n'a pas la portée « repo » (portées actuelles : ${scopes || 'aucune'}), `+
+        `il ne peut donc PAS voir les dépôts privés.\n`+
+        `→ Si « ${u}/${r} » est privé, recrée un token classique en cochant « repo » `+
+        `(ou un token « fine-grained » incluant ce dépôt).`
+      );
+    }
+
+    // Token a priori suffisant (repo coché, ou fine-grained) : soit le dépôt est
+    // privé et ce token précis n'y a pas accès, soit il n'existe pas. GitHub
+    // renvoie « Not Found » dans les deux cas.
+    const qui = login ? ` (connecté en tant que « ${login} »)` : '';
+    return new Error(
+      `Le dépôt « ${u}/${r} » est introuvable avec ce token${qui}.\n`+
+      `Deux causes possibles :\n`+
+      `• le dépôt est privé et ce token n'y a pas accès ;\n`+
+      `• le nom (ou sa casse) est erroné, ou le dépôt n'existe pas.\n`+
+      `GitHub répond « Not Found » dans les deux cas : il ne confirme jamais l'existence d'un dépôt privé qu'on n'a pas le droit de voir.\n`+
+      `→ Token « fine-grained » : vérifie que « ${u}/${r} » figure dans « Repository access ».\n`+
+      `→ Vérifie que ${login ? `« ${login} »` : 'ton compte'} est propriétaire ou collaborateur du dépôt.`
+    );
+  }
+
   // Récupère l'arbre complet du dépôt (chemins EXACTS, casse respectée).
   async function getArbre(){
     const u=val('user'), r=val('repo'), br=val('branch');
@@ -222,7 +308,7 @@
     // forward". On force donc une lecture réseau fraîche à chaque appel.
     const refUrl = `https://api.github.com/repos/${u}/${r}/git/ref/heads/${br}?_cb=${Date.now()}`;
     const refResp = await fetch(refUrl, { headers: headers(), cache: "no-store" });
-    if(!refResp.ok) throw await erreurGitHub(refResp, "Lecture de la branche impossible");
+    if(!refResp.ok) throw await diagnostiquerAcces(refResp, u, r, br);
     const ref = await refResp.json();
     const headSha = ref.object.sha;
     // 2) commit -> arbre (objets immuables, adressés par SHA : le cache est sans risque ici)
