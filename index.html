@@ -143,7 +143,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "1.8";
+  const VERSION = "1.9";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -240,6 +240,16 @@
         return new Error(`Limite de requêtes GitHub atteinte.\n→ Réessaie après ${quand}.`);
       }
       return new Error("Accès refusé (403). Le token n'a probablement pas la portée « repo ».\n→ Recrée un token classique en cochant « repo ».");
+    }
+    if(resp.status === 409){
+      // Un dépôt sans aucun commit renvoie 409 « Git Repository is empty ».
+      const err = new Error(
+        `Le dépôt « ${u}/${r} » est vide : il ne contient aucun commit.\n`+
+        `C'est souvent un dépôt créé mais jamais utilisé — il n'y a donc rien à lister ici.\n`+
+        `→ Pour le supprimer : ouvre sa page (bouton ci-dessous), puis « Settings » → tout en bas, section « Danger Zone » → « Delete this repository ».`
+      );
+      err.urlDepot = `https://github.com/${u}/${r}`;
+      return err;
     }
     if(resp.status !== 404){
       return await erreurGitHub(resp, "Lecture de la branche impossible");
@@ -411,6 +421,12 @@
           document.getElementById('branch').value = err.brancheCandidate;
           sauverChamps();
           lister();
+        });
+      }
+      // Cas « dépôt vide » : on propose d'ouvrir sa page GitHub (pour le supprimer, etc.).
+      if(err.urlDepot){
+        ajouterBoutonStatut("Ouvrir la page du dépôt", ()=>{
+          window.open(err.urlDepot, '_blank', 'noopener');
         });
       }
     }
