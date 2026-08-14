@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -33,6 +32,8 @@
   .btn { background:#0071e3; color:#fff; font-weight:600; border:none; padding:14px; border-radius:10px; width:100%; cursor:pointer; font-size:16px; }
   .btn:active { background:#005bb5; }
   .btn:disabled { opacity:.5; cursor:not-allowed; }
+  .btn-secondaire { background:#6e6e73; margin-top:10px; }
+  .btn-secondaire:active { background:#57575b; }
   .status { padding:12px; border-radius:8px; font-size:14px; font-weight:500; white-space:pre-wrap; display:none; margin-top:10px; }
   .success { background:#e8f5e9; color:#2e7d32; border:1px solid #c8e6c9; }
   .error { background:#ffebee; color:#c62828; border:1px solid #ffcdd2; }
@@ -75,6 +76,23 @@
   .json-valeur { color:#248a3d; }
   /* Vue « contenu brut » d'un fichier texte ou code (.txt / .py) */
   .texte-content { flex:1; overflow:auto; margin:0; padding:14px 16px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; line-height:1.5; white-space:pre; -webkit-overflow-scrolling:touch; }
+  /* Vue « tous les dépôts » */
+  .repo-bloc { border:1px solid #e5e5ea; border-radius:10px; margin-bottom:10px; overflow:hidden; }
+  .repo-entete { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px 14px; background:#f5f5f7; cursor:pointer; user-select:none; -webkit-user-select:none; }
+  .repo-entete:active { background:#ebebee; }
+  .repo-nom { font-weight:600; font-size:15px; word-break:break-all; }
+  .repo-compte { font-size:12px; color:#86868b; font-weight:500; margin-left:6px; }
+  .repo-chevron { font-size:12px; color:#86868b; transition:transform .2s ease; flex-shrink:0; }
+  .repo-chevron.open { transform:rotate(180deg); }
+  .repo-fichiers { display:none; padding:6px 12px 12px; }
+  .repo-fichiers.open { display:block; }
+  .rf-item { display:flex; align-items:center; gap:10px; padding:9px 4px; border-bottom:1px solid #f0f0f2; font-size:13px; }
+  .rf-item:last-child { border-bottom:none; }
+  .rf-nom { flex:1; font-family:monospace; word-break:break-all; }
+  .rf-type { flex-shrink:0; color:#0071e3; font-weight:600; font-size:12px; background:#eef4ff; padding:3px 8px; border-radius:6px; }
+  .rf-versions { flex-shrink:0; color:#6e6e73; font-size:12px; min-width:64px; text-align:right; }
+  .repo-erreur { padding:10px 4px; font-size:13px; color:#c62828; }
+  .repo-progres { font-size:12px; color:#86868b; padding:4px 4px 0; }
 </style>
 </head>
 <body>
@@ -104,12 +122,18 @@
       <div class="combo-panel" id="combo-panel"></div>
     </div>
     <button class="btn" onclick="lister()">Lister les fichiers (avec leur vraie casse)</button>
+    <button class="btn btn-secondaire" onclick="listerTout()">Lister tous les fichiers de tous les dépôts</button>
     <p class="hint" style="margin-bottom:0;">Les fichiers en double (même nom, casse différente) sont encadrés en orange. Vérifie bien lequel tu supprimes : garde <strong>index.html</strong> (minuscule), supprime <strong>Index.html</strong> (majuscule). Un bouton <strong>👁 Aperçu</strong> apparaît sur les fichiers HTML pour les voir tels qu'affichés dans un navigateur.</p>
   </div>
 
   <div class="card" id="files-card" style="display:none;">
     <h2>Fichiers du dépôt</h2>
     <div id="files-list"></div>
+  </div>
+
+  <div class="card" id="tous-card" style="display:none;">
+    <h2>Tous les dépôts</h2>
+    <div id="tous-list"></div>
   </div>
 
   <div id="status" class="status"></div>
@@ -157,7 +181,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.2";
+  const VERSION = "2.3";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -208,6 +232,13 @@
 
   // Fichiers texte / code affichables tels quels : .txt et .py.
   function estTexte(chemin){ return /\.(txt|py)$/i.test(chemin); }
+
+  // Type affiché dans la liste « Tous les dépôts » : extension en majuscules,
+  // ou « (sans extension) » s'il n'y en a pas.
+  function typeFichier(chemin){
+    const m = /\.([a-z0-9]+)$/i.exec(chemin);
+    return m ? m[1].toUpperCase() : '(sans extension)';
+  }
 
   function confirmer(msg){
     return new Promise(res=>{
@@ -368,6 +399,42 @@
     return { headSha, tree };
   }
 
+  // Comme getArbre(), mais paramétrable sur un dépôt/branche arbitraires
+  // (utilisé par « Lister tous les dépôts », qui parcourt chaque dépôt de
+  // l'utilisateur avec sa propre branche par défaut).
+  async function getArbrePour(u, r, br){
+    const refUrl = `https://api.github.com/repos/${u}/${r}/git/ref/heads/${br}?_cb=${Date.now()}`;
+    const refResp = await fetch(refUrl, { headers: headers(), cache: "no-store" });
+    if(!refResp.ok) throw await diagnostiquerAcces(refResp, u, r, br);
+    const ref = await refResp.json();
+    const headSha = ref.object.sha;
+    const cResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/commits/${headSha}`, { headers: headers() });
+    if(!cResp.ok) throw await erreurGitHub(cResp, "Lecture du commit impossible");
+    const commit = await cResp.json();
+    const tResp = await fetch(`https://api.github.com/repos/${u}/${r}/git/trees/${commit.tree.sha}?recursive=1`, { headers: headers() });
+    if(!tResp.ok) throw await erreurGitHub(tResp, "Lecture de l'arbre impossible");
+    const tree = await tResp.json();
+    return { headSha, tree };
+  }
+
+  // Nombre de versions (commits) d'un fichier donné dans un dépôt : on lit
+  // juste l'en-tête Link de la première page (per_page=1) et on prend le
+  // numéro de la dernière page — c'est le nombre total de commits touchant
+  // ce chemin, sans avoir à tous les télécharger.
+  async function compterVersions(u, r, chemin, br){
+    const url = `https://api.github.com/repos/${u}/${r}/commits?path=${encodeURIComponent(chemin)}&sha=${encodeURIComponent(br)}&per_page=1`;
+    const resp = await fetch(url, { headers: headers() });
+    if(!resp.ok) return null;
+    const link = resp.headers.get('Link');
+    if(link){
+      const m = /[?&]page=(\d+)>;\s*rel="last"/.exec(link);
+      if(m) return parseInt(m[1], 10);
+    }
+    // Pas d'en-tête « last » : soit 0, soit 1 commit touche ce fichier.
+    const data = await resp.json().catch(()=>[]);
+    return Array.isArray(data) ? data.length : null;
+  }
+
   let dernierArbre = null;
 
   async function lister(){
@@ -458,10 +525,121 @@
     }
   }
 
+  // ---------- « Lister tous les dépôts » ----------
+  // Parcourt tous les dépôts de l'utilisateur, affiche pour chacun le nom,
+  // repliable, et pour chaque fichier : nom, type (extension) et nombre de
+  // versions (commits) présentes sur GitHub.
+  async function listerTout(){
+    if(!val('token')){ ouvrirReglages(); message("Saisis d'abord ton token dans Réglages.","error"); return; }
+    const carte = document.getElementById('tous-card');
+    const zone = document.getElementById('tous-list');
+    carte.style.display='block';
+    zone.innerHTML = '';
+    zone.scrollIntoView({behavior:'smooth', block:'nearest'});
+    message("Chargement de la liste des dépôts…","success");
+
+    const ok = await chargerDepots();
+    if(!ok){ carte.style.display='none'; return; }
+    if(depotsCharges.length === 0){
+      zone.innerHTML = '<p class="hint">Aucun dépôt trouvé pour ce token.</p>';
+      message("Aucun dépôt trouvé.","success");
+      return;
+    }
+
+    // Un bloc repliable par dépôt, contenu chargé à la demande (au premier
+    // dépli) pour ne pas interroger l'API sur des dépôts qu'on ne consulte pas.
+    depotsCharges.forEach(d=>{
+      const bloc = document.createElement('div');
+      bloc.className = 'repo-bloc';
+
+      const entete = document.createElement('div');
+      entete.className = 'repo-entete';
+      const nomSpan = document.createElement('span');
+      nomSpan.className = 'repo-nom';
+      nomSpan.textContent = d.name + (d.prive ? ' 🔒' : '');
+      const compteSpan = document.createElement('span');
+      compteSpan.className = 'repo-compte';
+      entete.appendChild(nomSpan);
+      const droite = document.createElement('span');
+      droite.style.display='flex'; droite.style.alignItems='center';
+      droite.appendChild(compteSpan);
+      const chevron = document.createElement('span');
+      chevron.className = 'repo-chevron'; chevron.textContent = '▼';
+      droite.appendChild(chevron);
+      entete.appendChild(droite);
+      bloc.appendChild(entete);
+
+      const corps = document.createElement('div');
+      corps.className = 'repo-fichiers';
+      bloc.appendChild(corps);
+
+      let charge = false;   // évite de recharger à chaque repli/dépli
+      entete.addEventListener('click', async ()=>{
+        const ouvre = !corps.classList.contains('open');
+        corps.classList.toggle('open', ouvre);
+        chevron.classList.toggle('open', ouvre);
+        if(ouvre && !charge){
+          charge = true;
+          await chargerFichiersDepot(d, corps, compteSpan);
+        }
+      });
+
+      zone.appendChild(bloc);
+    });
+
+    message(`${depotsCharges.length} dépôt(s). Touche le nom d'un dépôt pour afficher (ou masquer) ses fichiers.`,"success");
+  }
+
+  // Charge et affiche, dans `corps`, la liste des fichiers d'un dépôt avec
+  // leur type et leur nombre de versions (interrogé fichier par fichier).
+  async function chargerFichiersDepot(d, corps, compteSpan){
+    corps.innerHTML = '<div class="repo-progres">Chargement…</div>';
+    try{
+      const branche = d.default_branch || 'main';
+      const { tree } = await getArbrePour(d.owner, d.name, branche);
+      const blobs = tree.tree.filter(e=>e.type==='blob').sort((a,b)=>a.path.localeCompare(b.path));
+      compteSpan.textContent = `(${blobs.length})`;
+
+      if(blobs.length === 0){
+        corps.innerHTML = '<div class="repo-erreur" style="color:#86868b;">Dépôt vide.</div>';
+        return;
+      }
+
+      corps.innerHTML = '';
+      const progres = document.createElement('div');
+      progres.className = 'repo-progres';
+      corps.appendChild(progres);
+
+      // Nombre de versions récupéré séquentiellement (avec retour visuel de
+      // progression), pour rester raisonnable sur le nombre de requêtes en
+      // parallèle envoyées à l'API GitHub.
+      for(let i=0; i<blobs.length; i++){
+        const e = blobs[i];
+        progres.textContent = `Analyse des versions… (${i+1}/${blobs.length})`;
+        const ligne = document.createElement('div');
+        ligne.className = 'rf-item';
+        const nom = document.createElement('span'); nom.className='rf-nom'; nom.textContent = e.path;
+        const type = document.createElement('span'); type.className='rf-type'; type.textContent = typeFichier(e.path);
+        const versions = document.createElement('span'); versions.className='rf-versions'; versions.textContent = '…';
+        ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions);
+        corps.insertBefore(ligne, progres);
+
+        const nb = await compterVersions(d.owner, d.name, e.path, branche);
+        versions.textContent = (nb===null) ? '?' : (nb===1 ? '1 version' : `${nb} versions`);
+      }
+      progres.remove();
+    }catch(err){
+      const txt = (err instanceof TypeError)
+        ? "Impossible de contacter GitHub."
+        : err.message;
+      corps.innerHTML = `<div class="repo-erreur">❌ ${txt}</div>`;
+    }
+  }
+
   // ---------- Combo box de choix du dépôt ----------
   // Un seul champ : tu tapes le nom à la main, OU tu déroules la liste de tes
   // dépôts avec le bouton ▼. Choisir une entrée remplit le même champ.
-  let depotsCharges = [];   // [{name, owner, prive}] mis en cache après chargement
+  let depotsCharges = [];   // [{name, owner, prive, default_branch}] mis en cache après chargement
 
   // Mémoire persistante par dépôt : branche déjà validée + nombre de fichiers
   // trouvés lors du dernier listing. Sert à ne plus redemander la branche et à
@@ -493,7 +671,7 @@
         if(lot.length < 100) break;
       }
       depotsCharges = depots
-        .map(d=>({ name:d.name, owner:d.owner.login, prive:d.private, full:d.full_name }))
+        .map(d=>({ name:d.name, owner:d.owner.login, prive:d.private, full:d.full_name, default_branch:d.default_branch }))
         .sort((a,b)=>a.full.localeCompare(b.full));
       return true;
     }catch(err){
