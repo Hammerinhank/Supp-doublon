@@ -132,7 +132,10 @@
   </div>
 
   <div class="card" id="tous-card" style="display:none;">
-    <h2>Tous les dépôts</h2>
+    <h2 style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+      <span>Tous les dépôts</span>
+      <button class="btn btn-secondaire" id="btn-tout-ouvrir" style="width:auto; margin-top:0; padding:8px 14px; font-size:13px;" onclick="basculerToutOuvrir()">Tout ouvrir</button>
+    </h2>
     <div id="tous-list"></div>
   </div>
 
@@ -181,7 +184,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.3";
+  const VERSION = "2.4";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -529,12 +532,19 @@
   // Parcourt tous les dépôts de l'utilisateur, affiche pour chacun le nom,
   // repliable, et pour chaque fichier : nom, type (extension) et nombre de
   // versions (commits) présentes sur GitHub.
+
+  // Références de chaque bloc dépôt affiché, pour permettre au bouton
+  // « Tout ouvrir / Tout fermer » d'agir sur tous les blocs à la fois.
+  let blocsDepots = [];
+
   async function listerTout(){
     if(!val('token')){ ouvrirReglages(); message("Saisis d'abord ton token dans Réglages.","error"); return; }
     const carte = document.getElementById('tous-card');
     const zone = document.getElementById('tous-list');
     carte.style.display='block';
     zone.innerHTML = '';
+    blocsDepots = [];
+    reinitialiserBoutonToutOuvrir();
     zone.scrollIntoView({behavior:'smooth', block:'nearest'});
     message("Chargement de la liste des dépôts…","success");
 
@@ -547,7 +557,8 @@
     }
 
     // Un bloc repliable par dépôt, contenu chargé à la demande (au premier
-    // dépli) pour ne pas interroger l'API sur des dépôts qu'on ne consulte pas.
+    // dépli, manuel ou via « Tout ouvrir ») pour ne pas interroger l'API sur
+    // des dépôts qu'on ne consulte pas.
     depotsCharges.forEach(d=>{
       const bloc = document.createElement('div');
       bloc.className = 'repo-bloc';
@@ -573,21 +584,67 @@
       corps.className = 'repo-fichiers';
       bloc.appendChild(corps);
 
-      let charge = false;   // évite de recharger à chaque repli/dépli
-      entete.addEventListener('click', async ()=>{
-        const ouvre = !corps.classList.contains('open');
-        corps.classList.toggle('open', ouvre);
-        chevron.classList.toggle('open', ouvre);
-        if(ouvre && !charge){
-          charge = true;
-          await chargerFichiersDepot(d, corps, compteSpan);
-        }
-      });
+      const item = { d, entete, corps, chevron, compteSpan, charge:false };
+      entete.addEventListener('click', ()=>basculerBlocDepot(item));
+      blocsDepots.push(item);
 
       zone.appendChild(bloc);
     });
 
-    message(`${depotsCharges.length} dépôt(s). Touche le nom d'un dépôt pour afficher (ou masquer) ses fichiers.`,"success");
+    message(`${depotsCharges.length} dépôt(s). Touche le nom d'un dépôt (ou « Tout ouvrir ») pour afficher ses fichiers.`,"success");
+  }
+
+  // Ouvre/ferme un seul bloc dépôt (clic sur son nom), en chargeant son
+  // contenu au besoin.
+  async function basculerBlocDepot(item){
+    const ouvre = !item.corps.classList.contains('open');
+    item.corps.classList.toggle('open', ouvre);
+    item.chevron.classList.toggle('open', ouvre);
+    if(ouvre && !item.charge){
+      item.charge = true;
+      await chargerFichiersDepot(item.d, item.corps, item.compteSpan);
+    }
+  }
+
+  // Remet le bouton « Tout ouvrir / Tout fermer » à son état initial.
+  function reinitialiserBoutonToutOuvrir(){
+    const btn = document.getElementById('btn-tout-ouvrir');
+    btn.textContent = 'Tout ouvrir';
+    btn.dataset.ouvert = '0';
+  }
+
+  // Ouvre (ou ferme) tous les blocs dépôts d'un coup. À l'ouverture, charge
+  // séquentiellement les dépôts pas encore consultés (pour rester raisonnable
+  // sur le nombre de requêtes envoyées en parallèle à l'API GitHub).
+  async function basculerToutOuvrir(){
+    if(blocsDepots.length === 0) return;
+    const btn = document.getElementById('btn-tout-ouvrir');
+    const doitOuvrir = btn.dataset.ouvert !== '1';
+
+    btn.disabled = true;
+    if(doitOuvrir){
+      btn.dataset.ouvert = '1';
+      btn.textContent = 'Tout fermer';
+      for(let i=0; i<blocsDepots.length; i++){
+        const item = blocsDepots[i];
+        item.corps.classList.add('open');
+        item.chevron.classList.add('open');
+        if(!item.charge){
+          message(`Chargement des fichiers… (dépôt ${i+1}/${blocsDepots.length} : ${item.d.name})`,"success");
+          item.charge = true;
+          await chargerFichiersDepot(item.d, item.corps, item.compteSpan);
+        }
+      }
+      message(`Tous les dépôts (${blocsDepots.length}) sont ouverts.`,"success");
+    } else {
+      btn.dataset.ouvert = '0';
+      btn.textContent = 'Tout ouvrir';
+      blocsDepots.forEach(item=>{
+        item.corps.classList.remove('open');
+        item.chevron.classList.remove('open');
+      });
+    }
+    btn.disabled = false;
   }
 
   // Charge et affiche, dans `corps`, la liste des fichiers d'un dépôt avec
