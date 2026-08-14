@@ -91,6 +91,9 @@
   .rf-nom { flex:1; font-family:monospace; word-break:break-all; }
   .rf-type { flex-shrink:0; color:#0071e3; font-weight:600; font-size:12px; background:#eef4ff; padding:3px 8px; border-radius:6px; }
   .rf-versions { flex-shrink:0; color:#6e6e73; font-size:12px; min-width:64px; text-align:right; }
+  .btn-lien { flex-shrink:0; background:#5856d6; color:#fff; border:none; width:30px; height:30px; border-radius:8px; font-size:14px; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center; }
+  .btn-lien:active { background:#3e3ca8; }
+  .btn-lien.copie { background:#34c759; }
   .repo-erreur { padding:10px 4px; font-size:13px; color:#c62828; }
   .repo-progres { font-size:12px; color:#86868b; padding:4px 4px 0; }
 </style>
@@ -184,7 +187,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.5";
+  const VERSION = "2.6";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -721,6 +724,57 @@
     }
   }
 
+  // Copie robuste dans le presse-papier (avec repli sur execCommand, utile
+  // sur iOS/Safari quand navigator.clipboard échoue ou est indisponible,
+  // par ex. hors contexte sécurisé).
+  function copierTexte(texte){
+    return new Promise(resolve=>{
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(texte).then(()=>resolve(true)).catch(()=>resolve(repliCopie(texte)));
+      } else {
+        resolve(repliCopie(texte));
+      }
+    });
+  }
+  function repliCopie(texte){
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = texte;
+      ta.style.position='fixed'; ta.style.left='-9999px'; ta.style.top='0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    }catch(_){ return false; }
+  }
+
+  // Retour visuel bref « ✓ » sur un bouton après une action réussie.
+  function feedbackBouton(btn, contenuNormal){
+    btn.classList.add('copie');
+    btn.textContent = '✓';
+    setTimeout(()=>{ btn.classList.remove('copie'); btn.textContent = contenuNormal; }, 1500);
+  }
+
+  // URL brute (raw) d'un fichier de gist, exploitable directement depuis une
+  // page HTML (balise <script src="…">, <link>, fetch(), <img src="…">, etc.).
+  // Sans SHA de commit dans l'URL : elle pointe donc toujours vers la
+  // dernière version du fichier.
+  function lienBrutGist(g, filename){
+    const owner = (g.owner && g.owner.login) ? g.owner.login : val('user');
+    return `https://gist.githubusercontent.com/${owner}/${g.id}/raw/${encodeURIComponent(filename)}`;
+  }
+
+  async function copierLienGist(g, filename, btn){
+    const url = lienBrutGist(g, filename);
+    const ok = await copierTexte(url);
+    if(ok) feedbackBouton(btn, '🔗');
+    message(ok
+      ? `Lien copié dans le presse-papier :\n${url}`
+      : `Copie automatique impossible — copie ce lien manuellement :\n${url}`,
+      ok ? "success" : "error");
+  }
+
   // Charge et affiche, dans `corps`, la liste des fichiers d'un gist avec leur
   // type et le nombre de versions du gist (un gist n'a qu'un seul historique,
   // commun à tous ses fichiers — une seule requête suffit donc, contrairement
@@ -753,7 +807,10 @@
         const t = typeFichier(f.filename);
         type.textContent = (t === '(sans extension)' && f.language) ? f.language.toUpperCase() : t;
         const versions = document.createElement('span'); versions.className='rf-versions'; versions.textContent = texteVersions;
-        ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions);
+        const lien = document.createElement('button'); lien.type='button'; lien.className='btn-lien'; lien.textContent='🔗';
+        lien.title = 'Copier le lien direct (utilisable dans une page HTML)';
+        lien.addEventListener('click', ()=>copierLienGist(g, f.filename, lien));
+        ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions); ligne.appendChild(lien);
         corps.insertBefore(ligne, progres);
       });
       progres.remove();
