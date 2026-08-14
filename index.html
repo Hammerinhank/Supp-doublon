@@ -122,7 +122,7 @@
       <div class="combo-panel" id="combo-panel"></div>
     </div>
     <button class="btn" onclick="lister()">Lister les fichiers (avec leur vraie casse)</button>
-    <button class="btn btn-secondaire" onclick="listerTout()">Lister tous les fichiers de tous les dépôts</button>
+    <button class="btn btn-secondaire" onclick="listerTout()">Lister tous les fichiers de tous les dépôts et gists</button>
     <p class="hint" style="margin-bottom:0;">Les fichiers en double (même nom, casse différente) sont encadrés en orange. Vérifie bien lequel tu supprimes : garde <strong>index.html</strong> (minuscule), supprime <strong>Index.html</strong> (majuscule). Un bouton <strong>👁 Aperçu</strong> apparaît sur les fichiers HTML pour les voir tels qu'affichés dans un navigateur.</p>
   </div>
 
@@ -133,7 +133,7 @@
 
   <div class="card" id="tous-card" style="display:none;">
     <h2 style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-      <span>Tous les dépôts</span>
+      <span>Tous les dépôts et gists</span>
       <button class="btn btn-secondaire" id="btn-tout-ouvrir" style="width:auto; margin-top:0; padding:8px 14px; font-size:13px;" onclick="basculerToutOuvrir()">Tout ouvrir</button>
     </h2>
     <div id="tous-list"></div>
@@ -184,7 +184,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.4";
+  const VERSION = "2.5";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -438,6 +438,22 @@
     return Array.isArray(data) ? data.length : null;
   }
 
+  // Comme compterVersions(), mais pour l'historique d'un gist entier (un gist
+  // n'a pas d'historique par fichier : une version = une modification du gist,
+  // quel que soit le fichier touché).
+  async function compterVersionsGist(id){
+    const url = `https://api.github.com/gists/${id}/commits?per_page=1`;
+    const resp = await fetch(url, { headers: headers() });
+    if(!resp.ok) return null;
+    const link = resp.headers.get('Link');
+    if(link){
+      const m = /[?&]page=(\d+)>;\s*rel="last"/.exec(link);
+      if(m) return parseInt(m[1], 10);
+    }
+    const data = await resp.json().catch(()=>[]);
+    return Array.isArray(data) ? data.length : null;
+  }
+
   let dernierArbre = null;
 
   async function lister(){
@@ -528,14 +544,44 @@
     }
   }
 
-  // ---------- « Lister tous les dépôts » ----------
-  // Parcourt tous les dépôts de l'utilisateur, affiche pour chacun le nom,
-  // repliable, et pour chaque fichier : nom, type (extension) et nombre de
-  // versions (commits) présentes sur GitHub.
+  // ---------- « Lister tous les dépôts et gists » ----------
+  // Parcourt tous les dépôts ET tous les gists de l'utilisateur, affiche pour
+  // chacun un bloc repliable, et pour chaque fichier : nom, type (extension)
+  // et nombre de versions (commits) présentes sur GitHub.
 
-  // Références de chaque bloc dépôt affiché, pour permettre au bouton
-  // « Tout ouvrir / Tout fermer » d'agir sur tous les blocs à la fois.
+  // Références de chaque bloc affiché (dépôt ou gist), pour permettre au
+  // bouton « Tout ouvrir / Tout fermer » d'agir sur tous les blocs à la fois.
   let blocsDepots = [];
+
+  // Construit la structure HTML commune (en-tête repliable + corps vide)
+  // utilisée aussi bien pour un dépôt que pour un gist.
+  function creerBlocUI(nomAffiche, badge){
+    const bloc = document.createElement('div');
+    bloc.className = 'repo-bloc';
+
+    const entete = document.createElement('div');
+    entete.className = 'repo-entete';
+    const nomSpan = document.createElement('span');
+    nomSpan.className = 'repo-nom';
+    nomSpan.textContent = nomAffiche + (badge ? ' ' + badge : '');
+    const compteSpan = document.createElement('span');
+    compteSpan.className = 'repo-compte';
+    entete.appendChild(nomSpan);
+    const droite = document.createElement('span');
+    droite.style.display='flex'; droite.style.alignItems='center';
+    droite.appendChild(compteSpan);
+    const chevron = document.createElement('span');
+    chevron.className = 'repo-chevron'; chevron.textContent = '▼';
+    droite.appendChild(chevron);
+    entete.appendChild(droite);
+    bloc.appendChild(entete);
+
+    const corps = document.createElement('div');
+    corps.className = 'repo-fichiers';
+    bloc.appendChild(corps);
+
+    return { bloc, entete, corps, chevron, compteSpan };
+  }
 
   async function listerTout(){
     if(!val('token')){ ouvrirReglages(); message("Saisis d'abord ton token dans Réglages.","error"); return; }
@@ -550,60 +596,68 @@
 
     const ok = await chargerDepots();
     if(!ok){ carte.style.display='none'; return; }
-    if(depotsCharges.length === 0){
-      zone.innerHTML = '<p class="hint">Aucun dépôt trouvé pour ce token.</p>';
-      message("Aucun dépôt trouvé.","success");
-      return;
-    }
 
     // Un bloc repliable par dépôt, contenu chargé à la demande (au premier
     // dépli, manuel ou via « Tout ouvrir ») pour ne pas interroger l'API sur
     // des dépôts qu'on ne consulte pas.
     depotsCharges.forEach(d=>{
-      const bloc = document.createElement('div');
-      bloc.className = 'repo-bloc';
-
-      const entete = document.createElement('div');
-      entete.className = 'repo-entete';
-      const nomSpan = document.createElement('span');
-      nomSpan.className = 'repo-nom';
-      nomSpan.textContent = d.name + (d.prive ? ' 🔒' : '');
-      const compteSpan = document.createElement('span');
-      compteSpan.className = 'repo-compte';
-      entete.appendChild(nomSpan);
-      const droite = document.createElement('span');
-      droite.style.display='flex'; droite.style.alignItems='center';
-      droite.appendChild(compteSpan);
-      const chevron = document.createElement('span');
-      chevron.className = 'repo-chevron'; chevron.textContent = '▼';
-      droite.appendChild(chevron);
-      entete.appendChild(droite);
-      bloc.appendChild(entete);
-
-      const corps = document.createElement('div');
-      corps.className = 'repo-fichiers';
-      bloc.appendChild(corps);
-
-      const item = { d, entete, corps, chevron, compteSpan, charge:false };
+      const { bloc, entete, corps, chevron, compteSpan } = creerBlocUI(d.name, d.prive ? '🔒' : '');
+      const item = { type:'repo', d, entete, corps, chevron, compteSpan, charge:false };
       entete.addEventListener('click', ()=>basculerBlocDepot(item));
       blocsDepots.push(item);
-
       zone.appendChild(bloc);
     });
 
-    message(`${depotsCharges.length} dépôt(s). Touche le nom d'un dépôt (ou « Tout ouvrir ») pour afficher ses fichiers.`,"success");
+    // Puis les gists, sous un même intitulé « Gists ». Un gist n'a pas de
+    // branche : ses fichiers sont lus directement depuis la réponse de
+    // l'API (pas besoin de reconstruire un arbre Git).
+    message("Chargement de la liste des gists…","success");
+    const gists = await chargerGists();
+
+    if(gists && gists.length > 0){
+      const titreGists = document.createElement('div');
+      titreGists.className = 'hint';
+      titreGists.style.cssText = 'margin:16px 0 8px; font-weight:600; color:#6e6e73;';
+      titreGists.textContent = `Gists (${gists.length})`;
+      zone.appendChild(titreGists);
+
+      gists.forEach(g=>{
+        const nomAffiche = (g.description && g.description.trim())
+          ? g.description.trim()
+          : (Object.keys(g.files||{})[0] || g.id);
+        const { bloc, entete, corps, chevron, compteSpan } = creerBlocUI(nomAffiche, g.public ? '' : '🔒');
+        const item = { type:'gist', g, entete, corps, chevron, compteSpan, charge:false };
+        entete.addEventListener('click', ()=>basculerBlocDepot(item));
+        blocsDepots.push(item);
+        zone.appendChild(bloc);
+      });
+    }
+
+    if(depotsCharges.length === 0 && (!gists || gists.length === 0)){
+      zone.innerHTML = '<p class="hint">Aucun dépôt ni gist trouvé pour ce token.</p>';
+      message("Aucun dépôt ni gist trouvé.","success");
+      return;
+    }
+
+    const nbGists = gists ? gists.length : 0;
+    message(`${depotsCharges.length} dépôt(s) et ${nbGists} gist(s). Touche un nom (ou « Tout ouvrir ») pour afficher ses fichiers.`,"success");
   }
 
-  // Ouvre/ferme un seul bloc dépôt (clic sur son nom), en chargeant son
-  // contenu au besoin.
+  // Ouvre/ferme un seul bloc (clic sur son nom), en chargeant son contenu au besoin.
   async function basculerBlocDepot(item){
     const ouvre = !item.corps.classList.contains('open');
     item.corps.classList.toggle('open', ouvre);
     item.chevron.classList.toggle('open', ouvre);
     if(ouvre && !item.charge){
       item.charge = true;
-      await chargerFichiersDepot(item.d, item.corps, item.compteSpan);
+      await chargerContenuBloc(item);
     }
+  }
+
+  // Dispatch vers le bon chargeur selon qu'il s'agit d'un dépôt ou d'un gist.
+  async function chargerContenuBloc(item){
+    if(item.type === 'gist') await chargerFichiersGist(item.g, item.corps, item.compteSpan);
+    else await chargerFichiersDepot(item.d, item.corps, item.compteSpan);
   }
 
   // Remet le bouton « Tout ouvrir / Tout fermer » à son état initial.
@@ -613,9 +667,9 @@
     btn.dataset.ouvert = '0';
   }
 
-  // Ouvre (ou ferme) tous les blocs dépôts d'un coup. À l'ouverture, charge
-  // séquentiellement les dépôts pas encore consultés (pour rester raisonnable
-  // sur le nombre de requêtes envoyées en parallèle à l'API GitHub).
+  // Ouvre (ou ferme) tous les blocs (dépôts + gists) d'un coup. À l'ouverture,
+  // charge séquentiellement ceux pas encore consultés (pour rester
+  // raisonnable sur le nombre de requêtes envoyées en parallèle à l'API GitHub).
   async function basculerToutOuvrir(){
     if(blocsDepots.length === 0) return;
     const btn = document.getElementById('btn-tout-ouvrir');
@@ -630,12 +684,13 @@
         item.corps.classList.add('open');
         item.chevron.classList.add('open');
         if(!item.charge){
-          message(`Chargement des fichiers… (dépôt ${i+1}/${blocsDepots.length} : ${item.d.name})`,"success");
+          const nom = item.type === 'gist' ? (item.g.description || item.g.id) : item.d.name;
+          message(`Chargement des fichiers… (${i+1}/${blocsDepots.length} : ${nom})`,"success");
           item.charge = true;
-          await chargerFichiersDepot(item.d, item.corps, item.compteSpan);
+          await chargerContenuBloc(item);
         }
       }
-      message(`Tous les dépôts (${blocsDepots.length}) sont ouverts.`,"success");
+      message(`Tous les éléments (${blocsDepots.length}) sont ouverts.`,"success");
     } else {
       btn.dataset.ouvert = '0';
       btn.textContent = 'Tout ouvrir';
@@ -645,6 +700,69 @@
       });
     }
     btn.disabled = false;
+  }
+
+  // Récupère tous les gists de l'utilisateur (les siens, publics et privés).
+  async function chargerGists(){
+    try{
+      const gists = [];
+      for(let page=1; page<=10; page++){
+        const url = `https://api.github.com/gists?per_page=100&page=${page}&_cb=${Date.now()}`;
+        const resp = await fetch(url, { headers: headers(), cache:"no-store" });
+        if(!resp.ok){ const e=await resp.json().catch(()=>({})); throw new Error(e.message||resp.status); }
+        const lot = await resp.json();
+        gists.push(...lot);
+        if(lot.length < 100) break;
+      }
+      return gists;
+    }catch(err){
+      message("Impossible de charger les gists : "+err.message,"error");
+      return null;
+    }
+  }
+
+  // Charge et affiche, dans `corps`, la liste des fichiers d'un gist avec leur
+  // type et le nombre de versions du gist (un gist n'a qu'un seul historique,
+  // commun à tous ses fichiers — une seule requête suffit donc, contrairement
+  // aux dépôts où chaque fichier a son propre historique).
+  async function chargerFichiersGist(g, corps, compteSpan){
+    corps.innerHTML = '<div class="repo-progres">Chargement…</div>';
+    try{
+      const fichiers = Object.values(g.files || {});
+      compteSpan.textContent = `(${fichiers.length})`;
+
+      if(fichiers.length === 0){
+        corps.innerHTML = '<div class="repo-erreur" style="color:#86868b;">Gist vide.</div>';
+        return;
+      }
+
+      corps.innerHTML = '';
+      const progres = document.createElement('div');
+      progres.className = 'repo-progres';
+      progres.textContent = 'Analyse des versions…';
+      corps.appendChild(progres);
+
+      const nbVersions = await compterVersionsGist(g.id);
+      const texteVersions = (nbVersions===null) ? '?' : (nbVersions===1 ? '1 version' : `${nbVersions} versions`);
+
+      fichiers.sort((a,b)=>a.filename.localeCompare(b.filename)).forEach(f=>{
+        const ligne = document.createElement('div');
+        ligne.className = 'rf-item';
+        const nom = document.createElement('span'); nom.className='rf-nom'; nom.textContent = f.filename;
+        const type = document.createElement('span'); type.className='rf-type';
+        const t = typeFichier(f.filename);
+        type.textContent = (t === '(sans extension)' && f.language) ? f.language.toUpperCase() : t;
+        const versions = document.createElement('span'); versions.className='rf-versions'; versions.textContent = texteVersions;
+        ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions);
+        corps.insertBefore(ligne, progres);
+      });
+      progres.remove();
+    }catch(err){
+      const txt = (err instanceof TypeError)
+        ? "Impossible de contacter GitHub."
+        : err.message;
+      corps.innerHTML = `<div class="repo-erreur">❌ ${txt}</div>`;
+    }
   }
 
   // Charge et affiche, dans `corps`, la liste des fichiers d'un dépôt avec
