@@ -86,14 +86,19 @@
   .repo-chevron.open { transform:rotate(180deg); }
   .repo-fichiers { display:none; padding:6px 12px 12px; }
   .repo-fichiers.open { display:block; }
-  .rf-item { display:flex; align-items:center; gap:10px; padding:9px 4px; border-bottom:1px solid #f0f0f2; font-size:13px; }
+  .rf-item { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:9px 4px; border-bottom:1px solid #f0f0f2; font-size:13px; }
   .rf-item:last-child { border-bottom:none; }
-  .rf-nom { flex:1; font-family:monospace; word-break:break-all; }
+  .rf-nom { flex:1 1 100%; font-family:monospace; word-break:break-all; }
   .rf-type { flex-shrink:0; color:#0071e3; font-weight:600; font-size:12px; background:#eef4ff; padding:3px 8px; border-radius:6px; }
-  .rf-versions { flex-shrink:0; color:#6e6e73; font-size:12px; min-width:64px; text-align:right; }
-  .btn-lien { flex-shrink:0; background:#5856d6; color:#fff; border:none; width:30px; height:30px; border-radius:8px; font-size:14px; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center; }
+  .rf-versions { flex-shrink:0; color:#6e6e73; font-size:12px; margin-left:auto; }
+  .btn-lien, .btn-voir-mini, .btn-json-mini { flex-shrink:0; color:#fff; border:none; width:30px; height:30px; border-radius:8px; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center; }
+  .btn-lien { background:#5856d6; font-size:14px; }
   .btn-lien:active { background:#3e3ca8; }
   .btn-lien.copie { background:#34c759; }
+  .btn-voir-mini { background:#30b0c7; font-size:14px; }
+  .btn-voir-mini:active { background:#2790a3; }
+  .btn-json-mini { background:#8e44ec; font-size:12px; font-weight:700; }
+  .btn-json-mini:active { background:#6b32b8; }
   .repo-erreur { padding:10px 4px; font-size:13px; color:#c62828; }
   .repo-progres { font-size:12px; color:#86868b; padding:4px 4px 0; }
 </style>
@@ -187,7 +192,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.6";
+  const VERSION = "2.7";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -779,6 +784,26 @@
   // type et le nombre de versions du gist (un gist n'a qu'un seul historique,
   // commun à tous ses fichiers — une seule requête suffit donc, contrairement
   // aux dépôts où chaque fichier a son propre historique).
+  // Ajoute, si pertinent selon l'extension, les boutons 📄 Voir (contenu
+  // brut : .txt/.py/.html) et { } Structure (.json) à une ligne `rf-item`.
+  // `voirFn`/`structureFn` sont déjà liées aux bons paramètres (dépôt ou gist).
+  function ajouterBoutonsContenu(ligne, nomFichier, voirFn, structureFn){
+    if(estTexte(nomFichier) || estHtml(nomFichier)){
+      const btn = document.createElement('button');
+      btn.type='button'; btn.className='btn-voir-mini'; btn.textContent='📄';
+      btn.title = 'Voir le contenu';
+      btn.addEventListener('click', voirFn);
+      ligne.appendChild(btn);
+    }
+    if(estJson(nomFichier)){
+      const btn = document.createElement('button');
+      btn.type='button'; btn.className='btn-json-mini'; btn.textContent='{ }';
+      btn.title = 'Voir la structure';
+      btn.addEventListener('click', structureFn);
+      ligne.appendChild(btn);
+    }
+  }
+
   async function chargerFichiersGist(g, corps, compteSpan){
     corps.innerHTML = '<div class="repo-progres">Chargement…</div>';
     try{
@@ -811,6 +836,9 @@
         lien.title = 'Copier le lien direct (utilisable dans une page HTML)';
         lien.addEventListener('click', ()=>copierLienGist(g, f.filename, lien));
         ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions); ligne.appendChild(lien);
+        ajouterBoutonsContenu(ligne, f.filename,
+          ()=>voirTexteGist(g.id, f.filename),
+          ()=>structureJsonGist(g.id, f.filename));
         corps.insertBefore(ligne, progres);
       });
       progres.remove();
@@ -854,6 +882,9 @@
         const type = document.createElement('span'); type.className='rf-type'; type.textContent = typeFichier(e.path);
         const versions = document.createElement('span'); versions.className='rf-versions'; versions.textContent = '…';
         ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions);
+        ajouterBoutonsContenu(ligne, e.path,
+          ()=>voirTexte(e.path, e.sha, d.owner, d.name),
+          ()=>structureJson(e.path, e.sha, d.owner, d.name));
         corps.insertBefore(ligne, progres);
 
         const nb = await compterVersions(d.owner, d.name, e.path, branche);
@@ -1125,11 +1156,11 @@
   function fermerTexte(){ document.getElementById('texte-overlay').classList.remove('visible'); }
   document.getElementById('texte-close').addEventListener('click', fermerTexte);
 
-  async function voirTexte(pathExact, blobSha){
-    if(!verifier()) return;
+  async function voirTexte(pathExact, blobSha, uExplicite, rExplicite){
+    const u = uExplicite || val('user'), r = rExplicite || val('repo');
+    if(!uExplicite && !verifier()) return;
     message(`Chargement de « ${pathExact} »…`,"success");
     try{
-      const u=val('user'), r=val('repo');
       const resp = await fetch(`https://api.github.com/repos/${u}/${r}/git/blobs/${blobSha}`, { headers: headers() });
       if(!resp.ok) throw await erreurGitHub(resp, "Lecture du fichier impossible");
       const blob = await resp.json();
@@ -1141,11 +1172,11 @@
     }
   }
 
-  async function structureJson(pathExact, blobSha){
-    if(!verifier()) return;
+  async function structureJson(pathExact, blobSha, uExplicite, rExplicite){
+    const u = uExplicite || val('user'), r = rExplicite || val('repo');
+    if(!uExplicite && !verifier()) return;
     message(`Analyse de « ${pathExact} »…`,"success");
     try{
-      const u=val('user'), r=val('repo');
       const resp = await fetch(`https://api.github.com/repos/${u}/${r}/git/blobs/${blobSha}`, { headers: headers() });
       if(!resp.ok) throw await erreurGitHub(resp, "Lecture du fichier impossible");
       const blob = await resp.json();
@@ -1174,6 +1205,47 @@
       message(`Aperçu de « ${pathExact} » ouvert.`,"success");
     }catch(err){
       message("Aperçu impossible : "+err.message,"error");
+    }
+  }
+
+  // ---- Équivalents « voir le contenu » / « structure » pour un fichier de gist ----
+  // Un gist n'a pas de blob adressable par SHA comme un dépôt : on relit le
+  // gist en entier (l'API renvoie le contenu de chaque fichier), avec un
+  // repli sur raw_url si le contenu est tronqué par l'API (fichier volumineux).
+  async function contenuFichierGist(gistId, filename){
+    const resp = await fetch(`https://api.github.com/gists/${gistId}`, { headers: headers() });
+    if(!resp.ok) throw await erreurGitHub(resp, "Lecture du gist impossible");
+    const data = await resp.json();
+    const f = data.files && data.files[filename];
+    if(!f) throw new Error("fichier introuvable dans ce gist (renommé ou supprimé depuis le listing ?)");
+    if(!f.truncated) return f.content || '';
+    const rawResp = await fetch(f.raw_url);
+    if(!rawResp.ok) throw new Error("fichier trop volumineux pour être affiché entièrement");
+    return await rawResp.text();
+  }
+
+  async function voirTexteGist(gistId, filename){
+    message(`Chargement de « ${filename} »…`,"success");
+    try{
+      const texte = await contenuFichierGist(gistId, filename);
+      ouvrirTexte(filename, texte);
+      message(`Contenu de « ${filename} » affiché.`,"success");
+    }catch(err){
+      message("Lecture impossible : "+err.message,"error");
+    }
+  }
+
+  async function structureJsonGist(gistId, filename){
+    message(`Analyse de « ${filename} »…`,"success");
+    try{
+      const texte = await contenuFichierGist(gistId, filename);
+      let donnees;
+      try { donnees = JSON.parse(texte); }
+      catch(e){ throw new Error("le contenu n'est pas un JSON valide (" + e.message + ")"); }
+      ouvrirStructure(filename, donnees);
+      message(`Structure de « ${filename} » affichée.`,"success");
+    }catch(err){
+      message("Analyse impossible : "+err.message,"error");
     }
   }
 
