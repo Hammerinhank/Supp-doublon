@@ -41,7 +41,13 @@
   .btn-statut:active { background:#005bb5; }
   .file-item { display:flex; justify-content:space-between; align-items:center; gap:8px; background:#f5f5f7; padding:10px 12px; border-radius:8px; margin-bottom:8px; font-size:14px; word-break:break-all; flex-wrap:wrap; }
   .file-item.dup { border:2px solid #ff9500; background:#fff8ec; }
-  .file-name { flex:1 1 100%; font-family:monospace; }
+  .file-name { flex:1; font-family:monospace; min-width:0; }
+  .icone-type { flex-shrink:0; background:transparent; border:none; font-size:19px; line-height:1; cursor:pointer; padding:4px 6px; border-radius:8px; }
+  .icone-type:active { background:#e5e5ea; }
+  .icone-type:disabled { cursor:default; opacity:.4; }
+  .rf-icone { flex-shrink:0; background:transparent; border:none; font-size:17px; line-height:1; cursor:pointer; padding:2px 4px; border-radius:6px; }
+  .rf-icone:active { background:#e5e5ea; }
+  .rf-icone:disabled { cursor:default; opacity:.4; }
   .btn-vue { background:#34c759; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-vue:active { background:#248a3d; }
   .btn-json { background:#5856d6; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
@@ -192,7 +198,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.7";
+  const VERSION = "2.8";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -249,6 +255,38 @@
   function typeFichier(chemin){
     const m = /\.([a-z0-9]+)$/i.exec(chemin);
     return m ? m[1].toUpperCase() : '(sans extension)';
+  }
+
+  // Icône affichée à côté du nom de chaque fichier, selon son extension.
+  const ICONES_TYPE = {
+    html:'🌐', htm:'🌐', json:'🗂️', py:'🐍', js:'📜', jsx:'📜', ts:'📜', tsx:'📜',
+    css:'🎨', md:'📝', txt:'📄', xml:'📰', csv:'📊', tsv:'📊', yml:'⚙️', yaml:'⚙️',
+    sh:'💻', bash:'💻', java:'☕', c:'💻', cpp:'💻', h:'💻', rb:'💎', go:'💻', rs:'⚙️',
+    php:'🐘', sql:'🗄️', ini:'⚙️', cfg:'⚙️', conf:'⚙️', toml:'⚙️',
+    png:'🖼️', jpg:'🖼️', jpeg:'🖼️', gif:'🖼️', svg:'🖼️', webp:'🖼️', ico:'🖼️',
+    pdf:'📕', zip:'🗜️', gz:'🗜️', tar:'🗜️', '7z':'🗜️', rar:'🗜️',
+    mp3:'🎵', wav:'🎵', mp4:'🎬', mov:'🎬', avi:'🎬',
+    woff:'🔤', woff2:'🔤', ttf:'🔤', otf:'🔤',
+    lock:'🔒', gitignore:'🙈'
+  };
+  function iconeType(chemin){
+    const m = /\.([a-z0-9]+)$/i.exec(chemin);
+    const ext = m ? m[1].toLowerCase() : '';
+    return ICONES_TYPE[ext] || '📄';
+  }
+
+  // Extensions considérées comme du contenu BINAIRE, donc non affichable
+  // comme du texte brut. Tout le reste (y compris les fichiers sans
+  // extension, comme README ou LICENSE) est traité comme du texte éditable.
+  const EXT_BINAIRES = new Set([
+    'png','jpg','jpeg','gif','svg','webp','ico','pdf','zip','gz','tar','7z','rar',
+    'mp3','wav','ogg','mp4','mov','avi','woff','woff2','ttf','otf','eot',
+    'exe','dll','so','dylib','class','jar','psd','ai','db','sqlite','bin'
+  ]);
+  function estTexteEditable(chemin){
+    const m = /\.([a-z0-9]+)$/i.exec(chemin);
+    if(!m) return true;
+    return !EXT_BINAIRES.has(m[1].toLowerCase());
   }
 
   function confirmer(msg){
@@ -490,6 +528,15 @@
       blobs.sort((a,b)=>a.path.localeCompare(b.path)).forEach(e=>{
         const div=document.createElement('div');
         div.className='file-item'+(estDoublon(e.path)?' dup':'');
+        // Icône de type, à côté du nom : pour tout fichier de texte éditable,
+        // un tap l'ouvre en plein écran (contenu brut) avec un bouton Fermer.
+        const editable = estTexteEditable(e.path);
+        const icone=document.createElement('button');
+        icone.type='button'; icone.className='icone-type'; icone.textContent=iconeType(e.path);
+        icone.title = editable ? 'Voir le contenu' : (typeFichier(e.path)+' — fichier binaire');
+        if(editable){ icone.addEventListener('click', ()=>voirTexte(e.path, e.sha)); }
+        else { icone.disabled = true; }
+        div.appendChild(icone);
         const name=document.createElement('div'); name.className='file-name'; name.textContent=e.path;
         div.appendChild(name);
         // Fichier HTML : bouton d'aperçu (page rendue comme dans un navigateur).
@@ -503,12 +550,6 @@
           const st=document.createElement('button'); st.className='btn-json'; st.textContent='{ } Structure';
           st.addEventListener('click', ()=>structureJson(e.path, e.sha));
           div.appendChild(st);
-        }
-        // Fichier texte / code : bouton d'affichage du contenu brut.
-        if(estTexte(e.path)){
-          const vt=document.createElement('button'); vt.className='btn-txt'; vt.textContent='📄 Voir';
-          vt.addEventListener('click', ()=>voirTexte(e.path, e.sha));
-          div.appendChild(vt);
         }
         const btn=document.createElement('button'); btn.className='btn-del'; btn.textContent='Supprimer';
         btn.addEventListener('click', ()=>supprimer(e.path, e.sha));
@@ -780,21 +821,28 @@
       ok ? "success" : "error");
   }
 
+  // Icône de type insérée en tête de ligne (avant le nom) dans la vue
+  // « Tous les dépôts » : pour un fichier de texte éditable, un tap l'ouvre
+  // en plein écran (contenu brut) avec un bouton Fermer, comme dans la liste
+  // d'un seul dépôt. `voirFn` est déjà lié aux bons paramètres (dépôt ou gist).
+  function creerIconeRf(nomFichier, voirFn){
+    const editable = estTexteEditable(nomFichier);
+    const icone = document.createElement('button');
+    icone.type='button'; icone.className='rf-icone'; icone.textContent=iconeType(nomFichier);
+    icone.title = editable ? 'Voir le contenu' : 'Fichier binaire';
+    if(editable){ icone.addEventListener('click', voirFn); }
+    else { icone.disabled = true; }
+    return icone;
+  }
+
   // Charge et affiche, dans `corps`, la liste des fichiers d'un gist avec leur
   // type et le nombre de versions du gist (un gist n'a qu'un seul historique,
   // commun à tous ses fichiers — une seule requête suffit donc, contrairement
   // aux dépôts où chaque fichier a son propre historique).
-  // Ajoute, si pertinent selon l'extension, les boutons 📄 Voir (contenu
-  // brut : .txt/.py/.html) et { } Structure (.json) à une ligne `rf-item`.
-  // `voirFn`/`structureFn` sont déjà liées aux bons paramètres (dépôt ou gist).
-  function ajouterBoutonsContenu(ligne, nomFichier, voirFn, structureFn){
-    if(estTexte(nomFichier) || estHtml(nomFichier)){
-      const btn = document.createElement('button');
-      btn.type='button'; btn.className='btn-voir-mini'; btn.textContent='📄';
-      btn.title = 'Voir le contenu';
-      btn.addEventListener('click', voirFn);
-      ligne.appendChild(btn);
-    }
+  // Ajoute le bouton { } Structure (.json) à une ligne `rf-item` — la vue
+  // « contenu brut » est désormais accessible via l'icône de type.
+  // `structureFn` est déjà liée aux bons paramètres (dépôt ou gist).
+  function ajouterBoutonsContenu(ligne, nomFichier, structureFn){
     if(estJson(nomFichier)){
       const btn = document.createElement('button');
       btn.type='button'; btn.className='btn-json-mini'; btn.textContent='{ }';
@@ -827,6 +875,7 @@
       fichiers.sort((a,b)=>a.filename.localeCompare(b.filename)).forEach(f=>{
         const ligne = document.createElement('div');
         ligne.className = 'rf-item';
+        const icone = creerIconeRf(f.filename, ()=>voirTexteGist(g.id, f.filename));
         const nom = document.createElement('span'); nom.className='rf-nom'; nom.textContent = f.filename;
         const type = document.createElement('span'); type.className='rf-type';
         const t = typeFichier(f.filename);
@@ -835,10 +884,8 @@
         const lien = document.createElement('button'); lien.type='button'; lien.className='btn-lien'; lien.textContent='🔗';
         lien.title = 'Copier le lien direct (utilisable dans une page HTML)';
         lien.addEventListener('click', ()=>copierLienGist(g, f.filename, lien));
-        ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions); ligne.appendChild(lien);
-        ajouterBoutonsContenu(ligne, f.filename,
-          ()=>voirTexteGist(g.id, f.filename),
-          ()=>structureJsonGist(g.id, f.filename));
+        ligne.appendChild(icone); ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions); ligne.appendChild(lien);
+        ajouterBoutonsContenu(ligne, f.filename, ()=>structureJsonGist(g.id, f.filename));
         corps.insertBefore(ligne, progres);
       });
       progres.remove();
@@ -878,13 +925,12 @@
         progres.textContent = `Analyse des versions… (${i+1}/${blobs.length})`;
         const ligne = document.createElement('div');
         ligne.className = 'rf-item';
+        const icone = creerIconeRf(e.path, ()=>voirTexte(e.path, e.sha, d.owner, d.name));
         const nom = document.createElement('span'); nom.className='rf-nom'; nom.textContent = e.path;
         const type = document.createElement('span'); type.className='rf-type'; type.textContent = typeFichier(e.path);
         const versions = document.createElement('span'); versions.className='rf-versions'; versions.textContent = '…';
-        ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions);
-        ajouterBoutonsContenu(ligne, e.path,
-          ()=>voirTexte(e.path, e.sha, d.owner, d.name),
-          ()=>structureJson(e.path, e.sha, d.owner, d.name));
+        ligne.appendChild(icone); ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions);
+        ajouterBoutonsContenu(ligne, e.path, ()=>structureJson(e.path, e.sha, d.owner, d.name));
         corps.insertBefore(ligne, progres);
 
         const nb = await compterVersions(d.owner, d.name, e.path, branche);
