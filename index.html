@@ -39,22 +39,24 @@
   .error { background:#ffebee; color:#c62828; border:1px solid #ffcdd2; }
   .btn-statut { display:block; margin-top:12px; background:#0071e3; color:#fff; border:none; padding:10px 16px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; }
   .btn-statut:active { background:#005bb5; }
-  .file-item { display:flex; justify-content:space-between; align-items:center; gap:8px; background:#f5f5f7; padding:10px 12px; border-radius:8px; margin-bottom:8px; font-size:14px; word-break:break-all; flex-wrap:wrap; }
+  .file-item { display:flex; flex-direction:column; gap:6px; background:#f5f5f7; padding:9px 10px; border-radius:8px; margin-bottom:7px; font-size:14px; }
   .file-item.dup { border:2px solid #ff9500; background:#fff8ec; }
-  .file-name { flex:1; font-family:monospace; min-width:0; }
+  .file-row-top { display:flex; align-items:flex-start; gap:6px; }
+  .file-name { flex:1; font-family:monospace; min-width:0; word-break:break-all; line-height:1.3; padding-top:5px; }
   .icone-type { flex-shrink:0; background:transparent; border:none; font-size:19px; line-height:1; cursor:pointer; padding:4px 6px; border-radius:8px; }
   .icone-type:active { background:#e5e5ea; }
   .icone-type:disabled { cursor:default; opacity:.4; }
   .rf-icone { flex-shrink:0; background:transparent; border:none; font-size:17px; line-height:1; cursor:pointer; padding:2px 4px; border-radius:6px; }
   .rf-icone:active { background:#e5e5ea; }
   .rf-icone:disabled { cursor:default; opacity:.4; }
-  .btn-vue { background:#34c759; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
+  .file-actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; }
+  .btn-vue { background:#34c759; color:#fff; border:none; padding:7px 12px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-vue:active { background:#248a3d; }
-  .btn-json { background:#5856d6; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
+  .btn-json { background:#5856d6; color:#fff; border:none; padding:7px 12px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-json:active { background:#3e3ca8; }
   .btn-txt { background:#30b0c7; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-txt:active { background:#2790a3; }
-  .btn-del { background:#ff3b30; color:#fff; border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; margin-left:auto; }
+  .btn-del { background:#ff3b30; color:#fff; border:none; padding:7px 12px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; flex-shrink:0; }
   .btn-del:active { background:#c1271d; }
   .hint { font-size:13px; color:#86868b; }
   .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:20px; z-index:1000; }
@@ -92,12 +94,15 @@
   .repo-chevron.open { transform:rotate(180deg); }
   .repo-fichiers { display:none; padding:6px 12px 12px; }
   .repo-fichiers.open { display:block; }
-  .rf-item { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:9px 4px; border-bottom:1px solid #f0f0f2; font-size:13px; }
+  .rf-item { display:flex; flex-direction:column; gap:5px; padding:9px 4px; border-bottom:1px solid #f0f0f2; font-size:13px; }
   .rf-item:last-child { border-bottom:none; }
-  .rf-nom { flex:1 1 100%; font-family:monospace; word-break:break-all; }
+  .rf-row-top { display:flex; align-items:flex-start; gap:6px; }
+  .rf-nom { flex:1; min-width:0; font-family:monospace; word-break:break-all; line-height:1.3; padding-top:2px; }
+  .rf-row-bottom { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .rf-type { flex-shrink:0; color:#0071e3; font-weight:600; font-size:12px; background:#eef4ff; padding:3px 8px; border-radius:6px; }
-  .rf-versions { flex-shrink:0; color:#6e6e73; font-size:12px; margin-left:auto; }
-  .btn-lien, .btn-voir-mini, .btn-json-mini { flex-shrink:0; color:#fff; border:none; width:30px; height:30px; border-radius:8px; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center; }
+  .rf-versions { flex-shrink:0; color:#6e6e73; font-size:12px; }
+  .rf-actions { display:flex; align-items:center; gap:6px; margin-left:auto; }
+  .btn-lien, .btn-voir-mini, .btn-json-mini { flex-shrink:0; color:#fff; border:none; width:28px; height:28px; border-radius:8px; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center; }
   .btn-lien { background:#5856d6; font-size:14px; }
   .btn-lien:active { background:#3e3ca8; }
   .btn-lien.copie { background:#34c759; }
@@ -198,7 +203,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.8";
+  const VERSION = "2.9";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -528,32 +533,37 @@
       blobs.sort((a,b)=>a.path.localeCompare(b.path)).forEach(e=>{
         const div=document.createElement('div');
         div.className='file-item'+(estDoublon(e.path)?' dup':'');
-        // Icône de type, à côté du nom : pour tout fichier de texte éditable,
-        // un tap l'ouvre en plein écran (contenu brut) avec un bouton Fermer.
+        // Ligne du haut : icône de type + nom, sur toute la largeur (nom lisible,
+        // qui ne se retrouve plus écrasé par les boutons d'action).
+        const rowTop=document.createElement('div'); rowTop.className='file-row-top';
         const editable = estTexteEditable(e.path);
         const icone=document.createElement('button');
         icone.type='button'; icone.className='icone-type'; icone.textContent=iconeType(e.path);
         icone.title = editable ? 'Voir le contenu' : (typeFichier(e.path)+' — fichier binaire');
         if(editable){ icone.addEventListener('click', ()=>voirTexte(e.path, e.sha)); }
         else { icone.disabled = true; }
-        div.appendChild(icone);
+        rowTop.appendChild(icone);
         const name=document.createElement('div'); name.className='file-name'; name.textContent=e.path;
-        div.appendChild(name);
+        rowTop.appendChild(name);
+        div.appendChild(rowTop);
+        // Ligne du bas : actions groupées et alignées à droite (denses).
+        const actions=document.createElement('div'); actions.className='file-actions';
         // Fichier HTML : bouton d'aperçu (page rendue comme dans un navigateur).
         if(estHtml(e.path)){
           const vue=document.createElement('button'); vue.className='btn-vue'; vue.textContent='👁 Aperçu';
           vue.addEventListener('click', ()=>apercu(e.path, e.sha));
-          div.appendChild(vue);
+          actions.appendChild(vue);
         }
         // Fichier JSON : bouton d'affichage de la structure (clés et types).
         if(estJson(e.path)){
           const st=document.createElement('button'); st.className='btn-json'; st.textContent='{ } Structure';
           st.addEventListener('click', ()=>structureJson(e.path, e.sha));
-          div.appendChild(st);
+          actions.appendChild(st);
         }
         const btn=document.createElement('button'); btn.className='btn-del'; btn.textContent='Supprimer';
         btn.addEventListener('click', ()=>supprimer(e.path, e.sha));
-        div.appendChild(btn);
+        actions.appendChild(btn);
+        div.appendChild(actions);
         list.appendChild(div);
       });
       // Le listing a réussi → la branche est bonne : on la mémorise pour ce dépôt,
@@ -875,17 +885,23 @@
       fichiers.sort((a,b)=>a.filename.localeCompare(b.filename)).forEach(f=>{
         const ligne = document.createElement('div');
         ligne.className = 'rf-item';
+        const rowTop = document.createElement('div'); rowTop.className = 'rf-row-top';
         const icone = creerIconeRf(f.filename, ()=>voirTexteGist(g.id, f.filename));
         const nom = document.createElement('span'); nom.className='rf-nom'; nom.textContent = f.filename;
+        rowTop.appendChild(icone); rowTop.appendChild(nom);
+        const rowBottom = document.createElement('div'); rowBottom.className = 'rf-row-bottom';
         const type = document.createElement('span'); type.className='rf-type';
         const t = typeFichier(f.filename);
         type.textContent = (t === '(sans extension)' && f.language) ? f.language.toUpperCase() : t;
         const versions = document.createElement('span'); versions.className='rf-versions'; versions.textContent = texteVersions;
+        const actionsRf = document.createElement('span'); actionsRf.className = 'rf-actions';
         const lien = document.createElement('button'); lien.type='button'; lien.className='btn-lien'; lien.textContent='🔗';
         lien.title = 'Copier le lien direct (utilisable dans une page HTML)';
         lien.addEventListener('click', ()=>copierLienGist(g, f.filename, lien));
-        ligne.appendChild(icone); ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions); ligne.appendChild(lien);
-        ajouterBoutonsContenu(ligne, f.filename, ()=>structureJsonGist(g.id, f.filename));
+        actionsRf.appendChild(lien);
+        ajouterBoutonsContenu(actionsRf, f.filename, ()=>structureJsonGist(g.id, f.filename));
+        rowBottom.appendChild(type); rowBottom.appendChild(versions); rowBottom.appendChild(actionsRf);
+        ligne.appendChild(rowTop); ligne.appendChild(rowBottom);
         corps.insertBefore(ligne, progres);
       });
       progres.remove();
@@ -925,12 +941,17 @@
         progres.textContent = `Analyse des versions… (${i+1}/${blobs.length})`;
         const ligne = document.createElement('div');
         ligne.className = 'rf-item';
+        const rowTop = document.createElement('div'); rowTop.className = 'rf-row-top';
         const icone = creerIconeRf(e.path, ()=>voirTexte(e.path, e.sha, d.owner, d.name));
         const nom = document.createElement('span'); nom.className='rf-nom'; nom.textContent = e.path;
+        rowTop.appendChild(icone); rowTop.appendChild(nom);
+        const rowBottom = document.createElement('div'); rowBottom.className = 'rf-row-bottom';
         const type = document.createElement('span'); type.className='rf-type'; type.textContent = typeFichier(e.path);
         const versions = document.createElement('span'); versions.className='rf-versions'; versions.textContent = '…';
-        ligne.appendChild(icone); ligne.appendChild(nom); ligne.appendChild(type); ligne.appendChild(versions);
-        ajouterBoutonsContenu(ligne, e.path, ()=>structureJson(e.path, e.sha, d.owner, d.name));
+        const actionsRf = document.createElement('span'); actionsRf.className = 'rf-actions';
+        ajouterBoutonsContenu(actionsRf, e.path, ()=>structureJson(e.path, e.sha, d.owner, d.name));
+        rowBottom.appendChild(type); rowBottom.appendChild(versions); rowBottom.appendChild(actionsRf);
+        ligne.appendChild(rowTop); ligne.appendChild(rowBottom);
         corps.insertBefore(ligne, progres);
 
         const nb = await compterVersions(d.owner, d.name, e.path, branche);
