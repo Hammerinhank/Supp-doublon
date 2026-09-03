@@ -155,6 +155,7 @@
       <span>Tous les dépôts et gists</span>
       <button class="btn btn-secondaire" id="btn-tout-ouvrir" style="width:auto; margin-top:0; padding:8px 14px; font-size:13px;" onclick="basculerToutOuvrir()">Tout ouvrir</button>
     </h2>
+    <div id="tous-total-global" class="hint" style="margin:-4px 0 10px; font-weight:600; display:none;"></div>
     <div id="tous-list"></div>
   </div>
 
@@ -203,7 +204,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "2.9";
+  const VERSION = "3.0";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -505,6 +506,80 @@
     return Array.isArray(data) ? data.length : null;
   }
 
+  // ---------- Tailles des commits (par fichier) ----------
+  // Met en forme un nombre d'octets en une chaîne lisible (o / Ko / Mo).
+  function formatOctets(o){
+    if(o === null || o === undefined || isNaN(o)) return '?';
+    if(o < 1024) return `${o} o`;
+    if(o < 1024*1024) return `${(o/1024).toLocaleString('fr-FR',{maximumFractionDigits:1})} Ko`;
+    return `${(o/(1024*1024)).toLocaleString('fr-FR',{maximumFractionDigits:2})} Mo`;
+  }
+
+  // Encode un chemin segment par segment (préserve les "/" entre dossiers,
+  // contrairement à encodeURIComponent appliqué au chemin entier).
+  function encoderChemin(chemin){
+    return chemin.split('/').map(encodeURIComponent).join('/');
+  }
+
+  // Liste complète (paginée) des SHA de commit ayant touché un fichier, du
+  // plus récent au plus ancien. Contrairement à compterVersions() (qui ne
+  // lit que l'en-tête Link pour compter sans tout télécharger), il faut ici
+  // chaque SHA pour aller chercher la taille du fichier à ce commit précis.
+  // Plafonné à 1000 commits (10 pages) par fichier.
+  async function listeCommitsFichier(u, r, chemin, br){
+    const shas = [];
+    for(let page=1; page<=10; page++){
+      const url = `https://api.github.com/repos/${u}/${r}/commits?path=${encodeURIComponent(chemin)}&sha=${encodeURIComponent(br)}&per_page=100&page=${page}`;
+      const resp = await fetch(url, { headers: headers() });
+      if(!resp.ok) break;
+      const lot = await resp.json().catch(()=>[]);
+      if(!Array.isArray(lot) || lot.length===0) break;
+      shas.push(...lot.map(c=>c.sha));
+      if(lot.length < 100) break;
+    }
+    return shas;
+  }
+
+  // Taille (en octets) d'un fichier tel qu'il existait à un commit donné, via
+  // l'API Contents (qui renvoie directement "size" sans qu'on ait à
+  // retélécharger et reconstruire l'arbre nous-mêmes).
+  async function tailleFichierARef(u, r, chemin, ref){
+    const url = `https://api.github.com/repos/${u}/${r}/contents/${encoderChemin(chemin)}?ref=${encodeURIComponent(ref)}`;
+    const resp = await fetch(url, { headers: headers() });
+    if(!resp.ok) return null;
+    const data = await resp.json().catch(()=>null);
+    if(!data || typeof data.size !== 'number') return null;
+    return data.size;
+  }
+
+  // Pour un fichier donné : nombre de commits l'ayant touché, taille au
+  // dernier commit (= taille actuelle, déjà connue via l'arbre — donc aucun
+  // appel réseau supplémentaire) et somme des tailles de CHAQUE commit de son
+  // historique (un appel par commit plus ancien que le dernier).
+  async function tailleHistoriqueFichier(u, r, chemin, br, tailleActuelle, onProgress){
+    const shas = await listeCommitsFichier(u, r, chemin, br);
+    if(shas.length === 0){
+      return { nb:0, tailleDerniere:tailleActuelle, tailleTotale:tailleActuelle, approx:false };
+    }
+    let total = tailleActuelle; // taille au commit le plus récent (shas[0])
+    let approx = false;
+    for(let i=1; i<shas.length; i++){
+      if(onProgress) onProgress(i, shas.length-1);
+      const taille = await tailleFichierARef(u, r, chemin, shas[i]);
+      if(taille === null) approx = true; else total += taille;
+    }
+    return { nb: shas.length, tailleDerniere: tailleActuelle, tailleTotale: total, approx };
+  }
+
+  // Résume en une ligne : « N commits · dernier X · total Y ».
+  function texteInfosCommits(info){
+    if(!info) return '?';
+    const nbTxt = info.nb===0 ? '0 commit' : (info.nb===1 ? '1 commit' : `${info.nb} commits`);
+    const dTxt = formatOctets(info.tailleDerniere);
+    const tTxt = (info.approx ? '≈ ' : '') + formatOctets(info.tailleTotale);
+    return `${nbTxt} · dernier ${dTxt} · total ${tTxt}`;
+  }
+
   let dernierArbre = null;
 
   async function lister(){
@@ -605,12 +680,29 @@
 
   // ---------- « Lister tous les dépôts et gists » ----------
   // Parcourt tous les dépôts ET tous les gists de l'utilisateur, affiche pour
-  // chacun un bloc repliable, et pour chaque fichier : nom, type (extension)
-  // et nombre de versions (commits) présentes sur GitHub.
+  // chacun un bloc repliable, et pour chaque fichier : nom, type (extension),
+  // nombre de commits, taille au dernier commit et somme des tailles de tous
+  // ses commits. Pour chaque dépôt (une fois son contenu chargé) : somme des
+  // tailles de tous les commits de tous ses fichiers.
 
   // Références de chaque bloc affiché (dépôt ou gist), pour permettre au
   // bouton « Tout ouvrir / Tout fermer » d'agir sur tous les blocs à la fois.
   let blocsDepots = [];
+
+  // Somme cumulée des tailles de tous les commits, pour tous les fichiers de
+  // tous les dépôts déjà ouverts. Mise à jour au fur et à mesure qu'un bloc
+  // termine son chargement — reflète donc les dépôts déjà consultés, pas
+  // forcément l'ensemble du compte tant que tout n'a pas été ouvert (via
+  // « Tout ouvrir » par exemple).
+  let sommeGlobaleTailles = 0;
+  let sommeGlobaleApprox = false;
+
+  function mettreAJourTotalGlobal(){
+    const div = document.getElementById('tous-total-global');
+    if(!div) return;
+    div.style.display = 'block';
+    div.textContent = `Σ tailles de tous les commits (dépôts ouverts) : ${sommeGlobaleApprox ? '≈ ' : ''}${formatOctets(sommeGlobaleTailles)}`;
+  }
 
   // Construit la structure HTML commune (en-tête repliable + corps vide)
   // utilisée aussi bien pour un dépôt que pour un gist.
@@ -649,6 +741,10 @@
     carte.style.display='block';
     zone.innerHTML = '';
     blocsDepots = [];
+    sommeGlobaleTailles = 0;
+    sommeGlobaleApprox = false;
+    const totalGlobalDiv = document.getElementById('tous-total-global');
+    if(totalGlobalDiv){ totalGlobalDiv.style.display = 'none'; totalGlobalDiv.textContent = ''; }
     reinitialiserBoutonToutOuvrir();
     zone.scrollIntoView({behavior:'smooth', block:'nearest'});
     message("Chargement de la liste des dépôts…","success");
@@ -933,12 +1029,18 @@
       progres.className = 'repo-progres';
       corps.appendChild(progres);
 
-      // Nombre de versions récupéré séquentiellement (avec retour visuel de
-      // progression), pour rester raisonnable sur le nombre de requêtes en
-      // parallèle envoyées à l'API GitHub.
+      // Pour chaque fichier : nombre de commits, taille au dernier commit
+      // (déjà connue via l'arbre, gratuite) et somme des tailles de tous ses
+      // commits (un appel par commit plus ancien que le dernier). Récupéré
+      // séquentiellement, fichier par fichier puis commit par commit, pour
+      // rester raisonnable sur le nombre de requêtes envoyées à l'API GitHub
+      // — pour un dépôt à l'historique fourni, cette étape peut prendre du
+      // temps.
+      let sommeDepot = 0;
+      let approxDepot = false;
       for(let i=0; i<blobs.length; i++){
         const e = blobs[i];
-        progres.textContent = `Analyse des versions… (${i+1}/${blobs.length})`;
+        progres.textContent = `Analyse des commits… (${i+1}/${blobs.length})`;
         const ligne = document.createElement('div');
         ligne.className = 'rf-item';
         const rowTop = document.createElement('div'); rowTop.className = 'rf-row-top';
@@ -954,10 +1056,18 @@
         ligne.appendChild(rowTop); ligne.appendChild(rowBottom);
         corps.insertBefore(ligne, progres);
 
-        const nb = await compterVersions(d.owner, d.name, e.path, branche);
-        versions.textContent = (nb===null) ? '?' : (nb===1 ? '1 version' : `${nb} versions`);
+        const info = await tailleHistoriqueFichier(d.owner, d.name, e.path, branche, e.size,
+          (fait, restant)=>{ progres.textContent = `Analyse des commits… (${i+1}/${blobs.length}) — tailles ${fait}/${restant}`; });
+        versions.textContent = texteInfosCommits(info);
+        sommeDepot += info.tailleTotale;
+        if(info.approx) approxDepot = true;
       }
       progres.remove();
+      compteSpan.textContent = `(${blobs.length}) · Σ ${approxDepot ? '≈ ' : ''}${formatOctets(sommeDepot)}`;
+
+      sommeGlobaleTailles += sommeDepot;
+      if(approxDepot) sommeGlobaleApprox = true;
+      mettreAJourTotalGlobal();
     }catch(err){
       const txt = (err instanceof TypeError)
         ? "Impossible de contacter GitHub."
