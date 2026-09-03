@@ -112,11 +112,29 @@
   .btn-json-mini:active { background:#6b32b8; }
   .repo-erreur { padding:10px 4px; font-size:13px; color:#c62828; }
   .repo-progres { font-size:12px; color:#86868b; padding:4px 4px 0; }
+  /* Bouton flip/flop : active/désactive la recherche (coûteuse) des tailles de commits */
+  .btn-toggle-tailles { border:none; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; color:#fff; background:#34c759; white-space:nowrap; }
+  .btn-toggle-tailles:active { filter:brightness(.9); }
+  .btn-toggle-tailles.actif { background:#ff3b30; }
+  .toolbar-globale { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; background:#fff; border-radius:14px; padding:14px 18px; margin-bottom:20px; box-shadow:0 4px 12px rgba(0,0,0,.05); }
+  .toolbar-globale-texte { font-size:13px; }
+  .toolbar-globale-titre { font-weight:600; }
+  .toolbar-globale-sous { display:block; color:#86868b; font-size:12px; margin-top:2px; }
+  .file-info { font-size:12px; color:#6e6e73; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>🧹 Supprime-doublon <span class="version" id="version"></span></h1>
+
+  <div class="toolbar-globale">
+    <span class="toolbar-globale-texte">
+      <span class="toolbar-globale-titre">Recherche des tailles de commit</span>
+      <span class="toolbar-globale-sous">S'applique à « Lister les fichiers » et « Lister tous les fichiers » — coûteux en requêtes.</span>
+    </span>
+    <button class="btn-toggle-tailles" id="btn-toggle-tailles" onclick="basculerRechercheTailles()"></button>
+  </div>
+
   <div class="card">
     <h2 class="section-toggle" onclick="basculerReglages()">
       <span>Réglages</span>
@@ -146,14 +164,16 @@
   </div>
 
   <div class="card" id="files-card" style="display:none;">
-    <h2>Fichiers du dépôt</h2>
+    <h2>Fichiers du dépôt <span class="repo-compte" id="files-somme"></span></h2>
     <div id="files-list"></div>
   </div>
 
   <div class="card" id="tous-card" style="display:none;">
-    <h2 style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+    <h2 style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
       <span>Tous les dépôts et gists</span>
-      <button class="btn btn-secondaire" id="btn-tout-ouvrir" style="width:auto; margin-top:0; padding:8px 14px; font-size:13px;" onclick="basculerToutOuvrir()">Tout ouvrir</button>
+      <span style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn btn-secondaire" id="btn-tout-ouvrir" style="width:auto; margin-top:0; padding:8px 14px; font-size:13px;" onclick="basculerToutOuvrir()">Tout ouvrir</button>
+      </span>
     </h2>
     <div id="tous-total-global" class="hint" style="margin:-4px 0 10px; font-weight:600; display:none;"></div>
     <div id="tous-list"></div>
@@ -204,7 +224,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "3.0";
+  const VERSION = "3.2";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -588,6 +608,8 @@
     // pas rester affichés, surtout si le nouveau chargement échoue.
     document.getElementById('files-card').style.display='none';
     document.getElementById('files-list').innerHTML='';
+    const filesSomme = document.getElementById('files-somme');
+    if(filesSomme) filesSomme.textContent = '';
     dernierArbre = null;
     message("Chargement des fichiers…","success");
     try{
@@ -605,7 +627,11 @@
 
       const list = document.getElementById('files-list');
       list.innerHTML = "";
-      blobs.sort((a,b)=>a.path.localeCompare(b.path)).forEach(e=>{
+      const blobsTries = blobs.sort((a,b)=>a.path.localeCompare(b.path));
+      // Référence de chaque ligne d'info, pour la passe d'analyse des commits
+      // qui suit le rendu (afin de ne pas retarder l'affichage de la liste).
+      const refsInfo = [];
+      blobsTries.forEach(e=>{
         const div=document.createElement('div');
         div.className='file-item'+(estDoublon(e.path)?' dup':'');
         // Ligne du haut : icône de type + nom, sur toute la largeur (nom lisible,
@@ -621,6 +647,11 @@
         const name=document.createElement('div'); name.className='file-name'; name.textContent=e.path;
         rowTop.appendChild(name);
         div.appendChild(rowTop);
+        // Ligne d'info : nombre de commits (et tailles si la recherche est
+        // activée), remplie ensuite par la passe séquentielle ci-dessous.
+        const info=document.createElement('div'); info.className='file-info'; info.textContent='…';
+        div.appendChild(info);
+        refsInfo.push({ e, info });
         // Ligne du bas : actions groupées et alignées à droite (denses).
         const actions=document.createElement('div'); actions.className='file-actions';
         // Fichier HTML : bouton d'aperçu (page rendue comme dans un navigateur).
@@ -646,6 +677,36 @@
       ecrireDepotInfo(val('user'), val('repo'), { branch: val('branch'), nbFichiers: blobs.length });
       document.getElementById('files-card').style.display='block';
       const nbDup = Object.values(parMinuscule).filter(a=>a.length>1).length;
+
+      // Passe séquentielle : nombre de commits (toujours) et, si la recherche
+      // des tailles est activée, taille au dernier commit + somme des
+      // tailles de tous les commits — par fichier, puis sommée pour le
+      // dépôt entier. Comme pour « Tous les dépôts », cela peut prendre du
+      // temps avec la recherche des tailles activée sur un historique fourni.
+      const u = val('user'), r = val('repo'), br = val('branch');
+      let sommeDepot = 0;
+      let approxDepot = false;
+      for(let i=0; i<refsInfo.length; i++){
+        const { e, info } = refsInfo[i];
+        message(`Analyse des commits… (${i+1}/${refsInfo.length})`, "success");
+        if(rechercheTaillesActive){
+          const infosCommit = await tailleHistoriqueFichier(u, r, e.path, br, e.size,
+            (fait, restant)=>{ message(`Analyse des commits… (${i+1}/${refsInfo.length}) — tailles ${fait}/${restant}`, "success"); });
+          info.textContent = texteInfosCommits(infosCommit);
+          sommeDepot += infosCommit.tailleTotale;
+          if(infosCommit.approx) approxDepot = true;
+        } else {
+          const nb = await compterVersions(u, r, e.path, br);
+          info.textContent = (nb===null) ? '?' : (nb===1 ? '1 commit' : `${nb} commits`);
+        }
+      }
+
+      if(filesSomme){
+        filesSomme.textContent = rechercheTaillesActive
+          ? `· Σ ${approxDepot ? '≈ ' : ''}${formatOctets(sommeDepot)}`
+          : '';
+      }
+
       message(nbDup>0
         ? `${blobs.length} fichier(s). ⚠️ ${nbDup} nom(s) en double par la casse — encadré(s) en orange.`
         : `${blobs.length} fichier(s). Aucun doublon de casse détecté.`,
@@ -702,6 +763,70 @@
     if(!div) return;
     div.style.display = 'block';
     div.textContent = `Σ tailles de tous les commits (dépôts ouverts) : ${sommeGlobaleApprox ? '≈ ' : ''}${formatOctets(sommeGlobaleTailles)}`;
+  }
+
+  // ---------- Flip/flop « recherche des tailles » ----------
+  // La recherche des tailles de commits (compterVersions complet + un appel
+  // API par commit et par fichier) est coûteuse en requêtes. Ce bouton
+  // permet de la désactiver complètement (vert : seul le nombre de commits,
+  // gratuit, est affiché) ou de l'activer (rouge : tailles calculées, plus
+  // lent). Le choix est mémorisé sur l'appareil.
+  let rechercheTaillesActive = false;
+  const CLE_RECHERCHE_TAILLES = 'supprime_doublon_recherche_tailles';
+
+  function chargerRechercheTailles(){
+    try { rechercheTaillesActive = localStorage.getItem(CLE_RECHERCHE_TAILLES) === '1'; } catch(_){}
+    mettreAJourBoutonRechercheTailles();
+  }
+
+  function mettreAJourBoutonRechercheTailles(){
+    const btn = document.getElementById('btn-toggle-tailles');
+    if(!btn) return;
+    btn.classList.toggle('actif', rechercheTaillesActive);
+    btn.textContent = rechercheTaillesActive ? 'Avec recherche de taille' : 'Sans recherche des tailles';
+    btn.title = rechercheTaillesActive
+      ? 'Calcule aussi la taille de chaque commit (beaucoup de requêtes, plus lent). Touche pour désactiver.'
+      : "N'affiche que le nombre de commits (rapide, gratuit). Touche pour activer le calcul des tailles.";
+  }
+
+  // Bascule le mode, pour les DEUX fonctionnalités (« Lister les fichiers »
+  // et « Lister tous les dépôts »). Si l'une ou l'autre affiche déjà des
+  // résultats, on les invalide pour qu'ils soient relus dans le nouveau mode.
+  function basculerRechercheTailles(){
+    rechercheTaillesActive = !rechercheTaillesActive;
+    try { localStorage.setItem(CLE_RECHERCHE_TAILLES, rechercheTaillesActive ? '1' : '0'); } catch(_){}
+    mettreAJourBoutonRechercheTailles();
+
+    let futInvalide = false;
+
+    if(blocsDepots.length > 0){
+      blocsDepots.forEach(item=>{
+        if(item.charge){
+          item.charge = false;
+          item.corps.classList.remove('open');
+          item.corps.innerHTML = '';
+          item.chevron.classList.remove('open');
+          item.compteSpan.textContent = '';
+        }
+      });
+      sommeGlobaleTailles = 0;
+      sommeGlobaleApprox = false;
+      const div = document.getElementById('tous-total-global');
+      if(div){ div.style.display = 'none'; div.textContent = ''; }
+      reinitialiserBoutonToutOuvrir();
+      futInvalide = true;
+    }
+
+    const filesCard = document.getElementById('files-card');
+    if(filesCard && filesCard.style.display !== 'none'){
+      futInvalide = true;
+    }
+
+    if(futInvalide){
+      message(rechercheTaillesActive
+        ? "Recherche des tailles activée — relance « Lister les fichiers » ou rouvre un dépôt pour l'appliquer."
+        : "Recherche des tailles désactivée — relance « Lister les fichiers » ou rouvre un dépôt pour un chargement plus rapide.", "success");
+    }
   }
 
   // Construit la structure HTML commune (en-tête repliable + corps vide)
@@ -1029,13 +1154,14 @@
       progres.className = 'repo-progres';
       corps.appendChild(progres);
 
-      // Pour chaque fichier : nombre de commits, taille au dernier commit
-      // (déjà connue via l'arbre, gratuite) et somme des tailles de tous ses
-      // commits (un appel par commit plus ancien que le dernier). Récupéré
-      // séquentiellement, fichier par fichier puis commit par commit, pour
-      // rester raisonnable sur le nombre de requêtes envoyées à l'API GitHub
-      // — pour un dépôt à l'historique fourni, cette étape peut prendre du
-      // temps.
+      // Pour chaque fichier : nombre de commits, et — seulement si le bouton
+      // « recherche des tailles » est actif (rouge) — taille au dernier
+      // commit (déjà connue via l'arbre, gratuite) et somme des tailles de
+      // tous ses commits (un appel par commit plus ancien que le dernier).
+      // Récupéré séquentiellement, fichier par fichier puis commit par
+      // commit, pour rester raisonnable sur le nombre de requêtes envoyées à
+      // l'API GitHub — avec la recherche des tailles activée, sur un dépôt à
+      // l'historique fourni, cette étape peut prendre du temps.
       let sommeDepot = 0;
       let approxDepot = false;
       for(let i=0; i<blobs.length; i++){
@@ -1056,18 +1182,27 @@
         ligne.appendChild(rowTop); ligne.appendChild(rowBottom);
         corps.insertBefore(ligne, progres);
 
-        const info = await tailleHistoriqueFichier(d.owner, d.name, e.path, branche, e.size,
-          (fait, restant)=>{ progres.textContent = `Analyse des commits… (${i+1}/${blobs.length}) — tailles ${fait}/${restant}`; });
-        versions.textContent = texteInfosCommits(info);
-        sommeDepot += info.tailleTotale;
-        if(info.approx) approxDepot = true;
+        if(rechercheTaillesActive){
+          const info = await tailleHistoriqueFichier(d.owner, d.name, e.path, branche, e.size,
+            (fait, restant)=>{ progres.textContent = `Analyse des commits… (${i+1}/${blobs.length}) — tailles ${fait}/${restant}`; });
+          versions.textContent = texteInfosCommits(info);
+          sommeDepot += info.tailleTotale;
+          if(info.approx) approxDepot = true;
+        } else {
+          const nb = await compterVersions(d.owner, d.name, e.path, branche);
+          versions.textContent = (nb===null) ? '?' : (nb===1 ? '1 commit' : `${nb} commits`);
+        }
       }
       progres.remove();
-      compteSpan.textContent = `(${blobs.length}) · Σ ${approxDepot ? '≈ ' : ''}${formatOctets(sommeDepot)}`;
 
-      sommeGlobaleTailles += sommeDepot;
-      if(approxDepot) sommeGlobaleApprox = true;
-      mettreAJourTotalGlobal();
+      if(rechercheTaillesActive){
+        compteSpan.textContent = `(${blobs.length}) · Σ ${approxDepot ? '≈ ' : ''}${formatOctets(sommeDepot)}`;
+        sommeGlobaleTailles += sommeDepot;
+        if(approxDepot) sommeGlobaleApprox = true;
+        mettreAJourTotalGlobal();
+      } else {
+        compteSpan.textContent = `(${blobs.length})`;
+      }
     }catch(err){
       const txt = (err instanceof TypeError)
         ? "Impossible de contacter GitHub."
@@ -1540,6 +1675,7 @@
   // Au démarrage : on restaure les valeurs, puis on enregistre à chaque frappe.
   chargerChamps();
   CHAMPS.forEach(id => document.getElementById(id).addEventListener('input', sauverChamps));
+  chargerRechercheTailles();
 </script>
 </body>
 </html>
