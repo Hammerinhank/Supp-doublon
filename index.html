@@ -224,7 +224,7 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "3.2";
+  const VERSION = "3.4";
   document.getElementById('version').textContent = "v" + VERSION;
 
   function val(id){ return document.getElementById(id).value.trim(); }
@@ -688,10 +688,10 @@
       let approxDepot = false;
       for(let i=0; i<refsInfo.length; i++){
         const { e, info } = refsInfo[i];
-        message(`Analyse des commits… (${i+1}/${refsInfo.length})`, "success");
+        message(`Analyse des commits… (${i+1}/${refsInfo.length}) : ${e.path}`, "success");
         if(rechercheTaillesActive){
           const infosCommit = await tailleHistoriqueFichier(u, r, e.path, br, e.size,
-            (fait, restant)=>{ message(`Analyse des commits… (${i+1}/${refsInfo.length}) — tailles ${fait}/${restant}`, "success"); });
+            (fait, restant)=>{ message(`Analyse des commits… (${i+1}/${refsInfo.length}) : ${e.path} — tailles ${fait}/${restant}`, "success"); });
           info.textContent = texteInfosCommits(infosCommit);
           sommeDepot += infosCommit.tailleTotale;
           if(infosCommit.approx) approxDepot = true;
@@ -787,6 +787,15 @@
     btn.title = rechercheTaillesActive
       ? 'Calcule aussi la taille de chaque commit (beaucoup de requêtes, plus lent). Touche pour désactiver.'
       : "N'affiche que le nombre de commits (rapide, gratuit). Touche pour activer le calcul des tailles.";
+
+    // « Tout ouvrir » est indisponible en mode « avec recherche des tailles » :
+    // on l'indique via une info-bulle, en plus du refus au clic.
+    const btnTout = document.getElementById('btn-tout-ouvrir');
+    if(btnTout){
+      btnTout.title = rechercheTaillesActive
+        ? '« Tout ouvrir » est indisponible en mode « avec recherche de taille » (trop de requêtes) — ouvre les dépôts un par un, ou repasse en mode « sans recherche des tailles ».'
+        : '';
+    }
   }
 
   // Bascule le mode, pour les DEUX fonctionnalités (« Lister les fichiers »
@@ -950,10 +959,19 @@
   // Ouvre (ou ferme) tous les blocs (dépôts + gists) d'un coup. À l'ouverture,
   // charge séquentiellement ceux pas encore consultés (pour rester
   // raisonnable sur le nombre de requêtes envoyées en parallèle à l'API GitHub).
+  // Refusé en mode « avec recherche des tailles » : ouvrir tous les dépôts
+  // d'un coup multiplierait alors les requêtes (un appel par commit et par
+  // fichier, pour chaque dépôt) au point de devenir extrêmement long et de
+  // consommer le quota d'API pour un résultat qui n'en vaudrait pas la peine.
   async function basculerToutOuvrir(){
     if(blocsDepots.length === 0) return;
     const btn = document.getElementById('btn-tout-ouvrir');
     const doitOuvrir = btn.dataset.ouvert !== '1';
+
+    if(doitOuvrir && rechercheTaillesActive){
+      message("« Tout ouvrir » n'est utilisable qu'en mode « sans recherche des tailles » (bouton vert). Avec la recherche des tailles activée, tout ouvrir d'un coup enverrait un nombre énorme de requêtes à l'API GitHub — ce serait extrêmement long, consommerait ton quota, pour un résultat qui n'en vaudrait pas la peine. Désactive la recherche des tailles, ou ouvre les dépôts un par un.", "error");
+      return;
+    }
 
     btn.disabled = true;
     if(doitOuvrir){
@@ -1166,7 +1184,7 @@
       let approxDepot = false;
       for(let i=0; i<blobs.length; i++){
         const e = blobs[i];
-        progres.textContent = `Analyse des commits… (${i+1}/${blobs.length})`;
+        progres.textContent = `Analyse des commits… (${i+1}/${blobs.length}) : ${e.path}`;
         const ligne = document.createElement('div');
         ligne.className = 'rf-item';
         const rowTop = document.createElement('div'); rowTop.className = 'rf-row-top';
@@ -1184,7 +1202,7 @@
 
         if(rechercheTaillesActive){
           const info = await tailleHistoriqueFichier(d.owner, d.name, e.path, branche, e.size,
-            (fait, restant)=>{ progres.textContent = `Analyse des commits… (${i+1}/${blobs.length}) — tailles ${fait}/${restant}`; });
+            (fait, restant)=>{ progres.textContent = `Analyse des commits… (${i+1}/${blobs.length}) : ${e.path} — tailles ${fait}/${restant}`; });
           versions.textContent = texteInfosCommits(info);
           sommeDepot += info.tailleTotale;
           if(info.approx) approxDepot = true;
