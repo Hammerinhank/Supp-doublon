@@ -125,7 +125,15 @@
 </head>
 <body>
 <div class="container">
-  <h1>🧹 Supprime-doublon <span class="version" id="version"></span></h1>
+  <h1>🧹 Supprime-doublon <span class="version" id="version" role="button" tabindex="0" style="cursor:pointer" title="Historique des versions" onclick="ouvrirHistoriqueVersions()"></span></h1>
+<div id="fond-historique" onclick="if(event.target===this)this.style.display='none'"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:#fff;color:#1d1d1f;border-radius:14px;max-width:520px;width:100%;max-height:80vh;display:flex;flex-direction:column;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e5e5ea;font-weight:600;">Historique des versions
+      <button type="button" onclick="document.getElementById('fond-historique').style.display='none'" style="border:0;background:#e5e5ea;border-radius:50%;width:30px;height:30px;">✕</button></div>
+    <div id="liste-historique" style="overflow-y:auto;padding:4px 16px 14px;font-size:14px;line-height:1.5;"></div>
+  </div>
+</div>
 
   <div class="toolbar-globale">
     <span class="toolbar-globale-texte">
@@ -224,11 +232,28 @@
   // ------------------------------------------------------------------
   // Numéro de version : un seul endroit à modifier pour le faire évoluer.
   // ------------------------------------------------------------------
-  const VERSION = "3.4";
+  const VERSION = "3.5";
   document.getElementById('version').textContent = "v" + VERSION;
 
+  // Historique des versions (le plus récent en tête), ouvert en touchant le numéro de version.
+  const HISTORIQUE_VERSIONS = [
+    { v:"3.5", t:"Utilisateur pré-rempli (Hammerinhank, branche main), toujours modifiable. Lister un dépôt, voir un fichier, sa structure ou son aperçu, et parcourir tous les dépôts publics fonctionnent sans token ; le token ne sert plus qu'à supprimer, et à voir aussi les dépôts privés et les gists. Le numéro de version ouvre désormais cet historique." },
+    { v:"3.4 et avant", t:"Détail non consigné." }
+  ];
+  function ouvrirHistoriqueVersions(){
+    const esc = t => String(t).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    document.getElementById('liste-historique').innerHTML = HISTORIQUE_VERSIONS.map(h =>
+      '<div style="padding:10px 0;border-bottom:1px solid #f0f0f2;"><b>v' + esc(h.v) + '</b><br>' + esc(h.t) + '</div>').join('');
+    document.getElementById('fond-historique').style.display = 'flex';
+  }
+  const UTILISATEUR_DEFAUT = "Hammerinhank";
+
   function val(id){ return document.getElementById(id).value.trim(); }
-  function headers(){ return { "Authorization": `token ${val('token')}`, "Accept": "application/vnd.github+json" }; }
+  function headers(){
+    const h = { "Accept": "application/vnd.github+json" };
+    if (val('token')) h["Authorization"] = `token ${val('token')}`;   // sans token : lecture des dépôts publics
+    return h;
+  }
   function message(txt, type){
     const b = document.getElementById('status');
     b.style.display='block'; b.className='status '+type; b.textContent=txt;
@@ -244,11 +269,16 @@
     b.appendChild(btn);
     b.scrollIntoView({behavior:'smooth', block:'nearest'});
   }
-  function verifier(){
-    if(!val('user') || !val('token') || !val('repo') || !val('branch')){
-      // Si le champ manquant est dans Réglages (replié par défaut), on l'ouvre.
-      if(!val('user') || !val('token') || !val('branch')) ouvrirReglages();
-      message("Remplis les quatre champs (utilisateur, token, dépôt, branche).", "error");
+  // ecriture = true : l'opération modifie le dépôt (suppression), le token est alors indispensable.
+  function verifier(ecriture){
+    if(!val('user') || !val('repo') || !val('branch')){
+      if(!val('user') || !val('branch')) ouvrirReglages();
+      message("Remplis l'utilisateur, le dépôt et la branche.", "error");
+      return false;
+    }
+    if(ecriture && !val('token')){
+      ouvrirReglages();
+      message("Un token GitHub est nécessaire pour supprimer un fichier. La consultation, elle, fonctionne sans.", "error");
       return false;
     }
     return true;
@@ -410,6 +440,10 @@
     }
 
     // --- Le dépôt n'est pas visible avec ce token : privé sans accès, ou inexistant. ---
+    // Sans token, seul le dépôt public est lisible : inutile d'interroger un token absent.
+    if(!val('token')){
+      return new Error("Dépôt « " + u + "/" + r + " » introuvable parmi les dépôts publics.\n→ Vérifie son nom ; s'il est privé, ajoute ton token dans Réglages pour y accéder.");
+    }
     // On interroge le token (validité + portées) pour trancher au mieux.
     let login = null, scopes = null, tokenValide = true;
     try{
@@ -603,7 +637,7 @@
   let dernierArbre = null;
 
   async function lister(){
-    if(!verifier()) return;
+    if(!verifier(false)) return;
     // On repart d'une liste vide : les fichiers du dépôt précédent ne doivent
     // pas rester affichés, surtout si le nouveau chargement échoue.
     document.getElementById('files-card').style.display='none';
@@ -869,7 +903,8 @@
   }
 
   async function listerTout(){
-    if(!val('token')){ ouvrirReglages(); message("Saisis d'abord ton token dans Réglages.","error"); return; }
+    if(!val('user')){ ouvrirReglages(); message("Saisis d'abord l'utilisateur dans Réglages.","error"); return; }
+    if(!val('token')) message("Sans token : dépôts publics seulement, et GitHub limite à 60 requêtes par heure — le détail de chaque dépôt peut vite s'arrêter.","success");
     const carte = document.getElementById('tous-card');
     const zone = document.getElementById('tous-list');
     carte.style.display='block';
@@ -1005,7 +1040,9 @@
     try{
       const gists = [];
       for(let page=1; page<=10; page++){
-        const url = `https://api.github.com/gists?per_page=100&page=${page}&_cb=${Date.now()}`;
+        const url = val('token')
+          ? `https://api.github.com/gists?per_page=100&page=${page}&_cb=${Date.now()}`
+          : `https://api.github.com/users/${encodeURIComponent(val('user'))}/gists?per_page=100&page=${page}&_cb=${Date.now()}`;
         const resp = await fetch(url, { headers: headers(), cache:"no-store" });
         if(!resp.ok){ const e=await resp.json().catch(()=>({})); throw new Error(e.message||resp.status); }
         const lot = await resp.json();
@@ -1251,12 +1288,14 @@
 
   // Récupère tes dépôts (le token suffit à t'identifier). Renvoie true si OK.
   async function chargerDepots(){
-    if(!val('token')){ ouvrirReglages(); message("Saisis d'abord ton token pour charger la liste des dépôts.","error"); return false; }
+    if(!val('user')){ ouvrirReglages(); message("Saisis d'abord l'utilisateur dans Réglages.","error"); return false; }
     try{
       const depots = [];
       // Pagination : on lit page par page jusqu'à en avoir moins qu'une pleine page.
       for(let page=1; page<=10; page++){
-        const url = `https://api.github.com/user/repos?per_page=100&page=${page}&sort=full_name&_cb=${Date.now()}`;
+        const url = val('token')
+          ? `https://api.github.com/user/repos?per_page=100&page=${page}&sort=full_name&_cb=${Date.now()}`
+          : `https://api.github.com/users/${encodeURIComponent(val('user'))}/repos?per_page=100&page=${page}&sort=full_name&_cb=${Date.now()}`;
         const resp = await fetch(url, { headers: headers(), cache:"no-store" });
         if(!resp.ok){ const e=await resp.json().catch(()=>({})); throw new Error(e.message||resp.status); }
         const lot = await resp.json();
@@ -1488,7 +1527,7 @@
 
   async function voirTexte(pathExact, blobSha, uExplicite, rExplicite){
     const u = uExplicite || val('user'), r = rExplicite || val('repo');
-    if(!uExplicite && !verifier()) return;
+    if(!uExplicite && !verifier(false)) return;
     message(`Chargement de « ${pathExact} »…`,"success");
     try{
       const resp = await fetch(`https://api.github.com/repos/${u}/${r}/git/blobs/${blobSha}`, { headers: headers() });
@@ -1504,7 +1543,7 @@
 
   async function structureJson(pathExact, blobSha, uExplicite, rExplicite){
     const u = uExplicite || val('user'), r = rExplicite || val('repo');
-    if(!uExplicite && !verifier()) return;
+    if(!uExplicite && !verifier(false)) return;
     message(`Analyse de « ${pathExact} »…`,"success");
     try{
       const resp = await fetch(`https://api.github.com/repos/${u}/${r}/git/blobs/${blobSha}`, { headers: headers() });
@@ -1522,7 +1561,7 @@
   }
 
   async function apercu(pathExact, blobSha){
-    if(!verifier()) return;
+    if(!verifier(false)) return;
     message(`Chargement de l'aperçu de « ${pathExact} »…`,"success");
     try{
       const u=val('user'), r=val('repo');
@@ -1581,7 +1620,7 @@
 
   // Supprime un fichier au chemin EXACT en reconstruisant l'arbre sans lui.
   async function supprimer(pathExact, blobSha){
-    if(!verifier()) return;
+    if(!verifier(true)) return;
     const ok = await confirmer(
       `Supprimer définitivement « ${pathExact} » ?\n\n`+
       "Un commit sera créé. L'historique Git garde toujours une trace, "+
@@ -1677,6 +1716,8 @@
   function chargerChamps(){
     let data = {};
     try { data = JSON.parse(localStorage.getItem(CLE_STOCKAGE)) || {}; } catch(_){}
+    if (!document.getElementById('user').value) document.getElementById('user').value = UTILISATEUR_DEFAUT;
+    if (!document.getElementById('branch').value) document.getElementById('branch').value = 'main';
     CHAMPS.forEach(id => {
       if (data[id] !== undefined && data[id] !== '') {
         document.getElementById(id).value = data[id];
@@ -1686,7 +1727,7 @@
 
   function oublierChamps(){
     try { localStorage.removeItem(CLE_STOCKAGE); } catch(_){}
-    CHAMPS.forEach(id => { document.getElementById(id).value = (id === 'branch' ? 'main' : ''); });
+    CHAMPS.forEach(id => { document.getElementById(id).value = (id === 'branch' ? 'main' : id === 'user' ? UTILISATEUR_DEFAUT : ''); });
     message("Identifiants mémorisés effacés de cet appareil.","success");
   }
 
